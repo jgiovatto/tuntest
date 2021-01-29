@@ -8,7 +8,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
-#include <signal.h>
 #include <unistd.h>
 
 #include <sys/types.h>
@@ -39,21 +38,6 @@ void die(const char *msg)
 {
     perror(msg);
     exit(0);
-}
-
-void signal_handler(int sig_num)
-{
-    switch (sig_num)
-    {
-    case SIGQUIT:
-    case SIGTERM:
-    case SIGINT:
-        bRunning = false;
-        sleep(1);
-        printf("\n" COLOR_NRM);
-        pthread_cancel(0);
-        break;
-    }
 }
 
 
@@ -95,7 +79,7 @@ void print_hex(const char * buff, size_t bufflen)
 
             --numrem;
         }
-        printf("%03zu  %s    %s\n", linenum, str2, str1);
+        printf("%03zu  %s    %s\n", linenum * 16, str2, str1);
 
         ++linenum;
     }
@@ -207,10 +191,6 @@ int bounce_frame(char *buff, size_t len)
 
 int main(int, char *[])
 {
-    signal(SIGINT,  signal_handler);
-    signal(SIGTERM, signal_handler);
-    signal(SIGQUIT, signal_handler);
-
     // create tun tap object
     TunTap tunTap;
 
