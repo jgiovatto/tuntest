@@ -2,6 +2,7 @@
 // Jan 29, 2021
 // tuntest tool to play with ip/arp frames
 
+// try arping 172.16.1.99 and ping 172.16.1.99
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -16,6 +17,7 @@
 #include <linux/if_tun.h>
 
 #include <arpa/inet.h>
+#include <netinet/ip.h>
 #include <netinet/in.h>
 #include <netinet/ether.h>
 
@@ -100,27 +102,31 @@ void print_hex(const char * buff, size_t bufflen)
 }
 
 
-void parse_frame(char *buff, size_t len)
+int bounce_frame(char *buff, size_t len)
 {
+    int result = 0;
+
     if(len > sizeof(ether_header))
     {
+        // make up nbr
+        ether_addr faux_nbr;
+
+        memcpy(&faux_nbr, ether_aton("02:02:00:00:00:99"), ETH_ALEN);
+
         struct ether_header * eth = (struct ether_header *) buff;
 
         const uint16_t ether_type = htons(eth->ether_type);
 
-        if(ether_type == ETHERTYPE_ARP)
+        // sanity check for eth arp
+        if((len == sizeof(struct ether_header) + sizeof(struct arphdr) + (2 * (ETH_ALEN + 4))) && (ether_type == ETHERTYPE_ARP))
         {
-
             struct arphdr * arp = (struct arphdr*) (eth + 1);
-
-            if((ntohs(arp->ar_hrd) == ARPHRD_ETHER) &&
-                    (ntohs(arp->ar_pro) == ETHERTYPE_IP) &&
-                    (arp->ar_hln        == ETH_ALEN)     &&
-                    (arp->ar_pln        == 4)            &&
-                    (len                == sizeof(struct ether_header) +
-                     sizeof(struct arphdr)       +
-                     (2 * (ETH_ALEN + 4))))
-
+            
+            if((ntohs(arp->ar_op)  == ARPOP_REQUEST) &&
+               (ntohs(arp->ar_hrd) == ARPHRD_ETHER)  &&
+               (ntohs(arp->ar_pro) == ETHERTYPE_IP)  &&
+               (arp->ar_hln        == ETH_ALEN)      &&
+               (arp->ar_pln        == 4))
             {
                 // eth hdr [[ff ff ff ff ff ff]
                 //          [ee 66 e3 bc 9c b7]
@@ -131,33 +137,70 @@ void parse_frame(char *buff, size_t len)
                 //          [06]
                 //          [04]
                 //          [00 01]
-                //          [ee 11 22 33 44 55]  [ac 10 01 01]
+                //          [02 02 00 00 00 01]  [ac 10 01 01]
                 //          [00 00 00 00 00 00]  [ac 10 01 02]]
 
                 struct arp_ipv4_req_
                 {
-                    struct ether_addr sha;
-                    in_addr           sip;
-                    struct ether_addr tha;
-                    in_addr           tip;
-                } __attribute__((packed)) * arpr = (struct arp_ipv4_req_ *) (arp + 1);
+                    struct ether_addr src_hw;
+                    in_addr           src_ip;
 
-                printf(COLOR_YEL "eth_type ARP:");
-                printf(", thw [%s]", ether_ntoa(&arpr->tha));
-                printf(", shw [%s]", ether_ntoa(&arpr->sha));
-                printf(", sip [%s]", inet_ntoa(arpr->sip));
-                printf(", tip [%s]", inet_ntoa(arpr->tip));
+                    struct ether_addr tar_hw;
+                    in_addr           tar_ip;
+                } __attribute__((packed)) * arp_req = (struct arp_ipv4_req_ *) (arp + 1);
+
+                printf(COLOR_YEL "in  eth_type ARP:");
+                printf("t_hw [%s]", ether_ntoa(&arp_req->tar_hw));
+                printf(", s_hw [%s]", ether_ntoa(&arp_req->src_hw));
+                printf(", s_ip [%s]", inet_ntoa(arp_req->src_ip));
+                printf(", t_ip [%s]", inet_ntoa(arp_req->tar_ip));
                 printf("\n" COLOR_NRM);
+
+                // swap src/target ip addrs
+                const in_addr tmp_ip = arp_req->tar_ip;
+                arp_req->tar_ip = arp_req->src_ip;
+                arp_req->src_ip = tmp_ip;
+
+                // swap src/target hw addrs
+                memcpy(&arp_req->tar_hw, &arp_req->src_hw, ETH_ALEN);
+                memcpy(&arp_req->src_hw, &faux_nbr, ETH_ALEN);
+            
+                // set as reply   
+                arp->ar_op = htons(ARPOP_REPLY);
+
+                printf(COLOR_YEL "out eth_type ARP:");
+                printf("t_hw [%s]", ether_ntoa(&arp_req->tar_hw));
+                printf(", s_hw [%s]", ether_ntoa(&arp_req->src_hw));
+                printf(", s_ip [%s]", inet_ntoa(arp_req->src_ip));
+                printf(", t_ip [%s]", inet_ntoa(arp_req->tar_ip));
+                printf("\n" COLOR_NRM);
+
+                // return complete arp reply
+                result = len;
             }
         }
-        else if(ether_type == ETHERTYPE_IP)
+        // sanity check for eth ipv4
+        else if((len > sizeof(struct iphdr)) && (ether_type == ETHERTYPE_IP))
         {
-            printf(COLOR_GRN "len %zu, eth_type IPv4\n" COLOR_NRM, len);
+            struct iphdr * ip = (struct iphdr*) (eth + 1);
 
+            printf(COLOR_GRN "len %zu, eth_type IPv4, proto 0x%hhx\n" COLOR_NRM, len, ip->protocol);
+
+            // XXX TODO reply to icmp
             print_hex(buff, len);
         }
 
+
+      // something to send back
+      if(result > 0)
+       {
+         // must swap eth src/dst
+         memcpy(&eth->ether_dhost, &eth->ether_shost, ETH_ALEN);
+         memcpy(&eth->ether_shost, &faux_nbr, ETH_ALEN);
+       }
     }
+
+   return result;
 }
 
 
@@ -168,15 +211,11 @@ int main(int, char *[])
     signal(SIGTERM, signal_handler);
     signal(SIGQUIT, signal_handler);
 
-    const int mode = IFF_TAP | IFF_NO_PI;
-
+    // create tun tap object
     TunTap tunTap;
 
-    // create tun tap
-    const auto fd = tunTap.open("/dev/net/tun", "tuntap0", mode);
-
     // open
-    if(fd < 0)
+    if(tunTap.open("/dev/net/tun", "tuntap0", IFF_TAP | IFF_NO_PI) < 0)
     {
         die("tun open");
     }
@@ -187,6 +226,7 @@ int main(int, char *[])
         die("tun set ip");
     }
 
+    // set hw addr
     if(tunTap.set_hw_address(ether_aton("02:02:00:00:00:01")) < 0)
     {
         die("tun set ip");
@@ -208,15 +248,20 @@ int main(int, char *[])
     {
         char buff[2048] = {0};
 
-        const int result = tunTap.read(buff, sizeof(buff));
+        const int num_read = tunTap.read(buff, sizeof(buff));
 
-        if(result < 0)
+        if(num_read < 0)
         {
             die("tun read");
         }
         else
         {
-            parse_frame(buff, result);
+            const int num_write = bounce_frame(buff, num_read);
+
+            if(num_write > 0)
+             {
+               tunTap.write(buff, num_write);
+             }
         }
     }
 
