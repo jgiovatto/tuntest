@@ -19,6 +19,7 @@
 #include <netinet/ip.h>
 #include <netinet/in.h>
 #include <netinet/ether.h>
+#include <netinet/ip_icmp.h>
 
 #include <net/ethernet.h>
 #include <net/if_arp.h>
@@ -83,7 +84,35 @@ void print_hex(const char * buff, size_t bufflen)
 
         ++linenum;
     }
+
+   printf("\n");
 }
+
+uint16_t csum16(const void *buff, uint16_t len)
+{
+  uint32_t sum = 0;
+
+  uint16_t const * p = (uint16_t const *) buff;
+
+  while(len > 1)
+   {
+     sum += *p++;
+     len -= 2;
+   }
+
+  if(len > 0)
+   {
+     sum += *((uint8_t *) p);
+   }
+
+  while(sum >> 16)
+   {
+     sum = (sum & 0xFFFF) + (sum >> 16);
+   }
+
+  return(sum);
+}
+
 
 
 int bounce_frame(char *buff, size_t len)
@@ -102,9 +131,12 @@ int bounce_frame(char *buff, size_t len)
         const uint16_t ether_type = htons(eth->ether_type);
 
         // sanity check for eth arp
-        if((len == sizeof(struct ether_header) + sizeof(struct arphdr) + (2 * (ETH_ALEN + 4))) && (ether_type == ETHERTYPE_ARP))
+        if((len == sizeof(struct ether_header) + sizeof(struct arphdr) + (2 * (ETH_ALEN + 4))) && 
+           (ether_type == ETHERTYPE_ARP))
         {
-            struct arphdr * arp = (struct arphdr*) (eth + 1);
+            size_t offset = sizeof(ether_header);
+
+            struct arphdr * arp = (struct arphdr*) (buff + offset);
             
             if((ntohs(arp->ar_op)  == ARPOP_REQUEST) &&
                (ntohs(arp->ar_hrd) == ARPHRD_ETHER)  &&
@@ -133,7 +165,7 @@ int bounce_frame(char *buff, size_t len)
                     in_addr           tar_ip;
                 } __attribute__((packed)) * arp_req = (struct arp_ipv4_req_ *) (arp + 1);
 
-                printf(COLOR_YEL "in  eth_type ARP:");
+                printf(COLOR_YEL "in  ETH_TYPE ARP:");
                 printf("t_hw [%s]", ether_ntoa(&arp_req->tar_hw));
                 printf(", s_hw [%s]", ether_ntoa(&arp_req->src_hw));
                 printf(", s_ip [%s]", inet_ntoa(arp_req->src_ip));
@@ -152,7 +184,7 @@ int bounce_frame(char *buff, size_t len)
                 // set as reply   
                 arp->ar_op = htons(ARPOP_REPLY);
 
-                printf(COLOR_YEL "out eth_type ARP:");
+                printf(COLOR_YEL "out ETH_TYPE ARP:");
                 printf("t_hw [%s]", ether_ntoa(&arp_req->tar_hw));
                 printf(", s_hw [%s]", ether_ntoa(&arp_req->src_hw));
                 printf(", s_ip [%s]", inet_ntoa(arp_req->src_ip));
@@ -166,12 +198,56 @@ int bounce_frame(char *buff, size_t len)
         // sanity check for eth ipv4
         else if((len > sizeof(struct iphdr)) && (ether_type == ETHERTYPE_IP))
         {
-            struct iphdr * ip = (struct iphdr*) (eth + 1);
+            size_t offset = sizeof(ether_header);
 
-            printf(COLOR_GRN "len %zu, eth_type IPv4, proto 0x%hhx\n" COLOR_NRM, len, ip->protocol);
+            struct iphdr * ip = (struct iphdr*) (buff + offset);
 
             // XXX TODO reply to icmp
             print_hex(buff, len);
+
+            if(csum16(ip, ip->ihl << 2) == 0xffff)
+             {
+                switch(ip->protocol)
+                 {
+                    case IPPROTO_ICMP:
+                     {
+                       offset += (ip->ihl << 2);
+
+                       struct icmphdr * icmp = (struct icmphdr *)(buff + offset);
+
+                       const size_t icmplen = ntohs(ip->tot_len) - (ip->ihl << 2);
+
+                       if(csum16(icmp, icmplen) == 0xffff)
+                        {
+                           printf(COLOR_GRN "ETH_TYPE IPv4: ICMP type %hhu, icmplen %zu\n" COLOR_NRM, 
+                                  icmp->type, icmplen);
+
+                           if(icmp->type == ICMP_ECHO)
+                             {
+                               icmp->type = ICMP_ECHOREPLY;
+
+                               icmp->checksum = 0;
+                               icmp->checksum = csum16(icmp, icmplen);
+
+                               // XXX TODO
+                             }
+                  
+                        }
+                       else
+                        {
+
+                        }
+                     }
+
+                    break;
+                 }
+             }
+            else
+             {
+               printf(COLOR_RED "len %zu, ETH_TYPE IPv4: ICMP bad chksum\n" COLOR_NRM, len);
+
+             }
+
         }
 
 
@@ -244,6 +320,8 @@ int main(int, char *[])
              }
         }
     }
+
+    printf("bye \n" COLOR_NRM);
 
     return (0);
 }
