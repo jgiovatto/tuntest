@@ -165,7 +165,7 @@ int bounce_frame(char *buff, size_t len)
                     in_addr           tar_ip;
                 } __attribute__((packed)) * arp_req = (struct arp_ipv4_req_ *) (arp + 1);
 
-                printf(COLOR_YEL "in  ETH_TYPE ARP:");
+                printf(COLOR_YEL "in  ETH ARP:");
                 printf("t_hw [%s]", ether_ntoa(&arp_req->tar_hw));
                 printf(", s_hw [%s]", ether_ntoa(&arp_req->src_hw));
                 printf(", s_ip [%s]", inet_ntoa(arp_req->src_ip));
@@ -184,7 +184,7 @@ int bounce_frame(char *buff, size_t len)
                 // set as reply   
                 arp->ar_op = htons(ARPOP_REPLY);
 
-                printf(COLOR_YEL "out ETH_TYPE ARP:");
+                printf(COLOR_YEL "out ETH ARP:");
                 printf("t_hw [%s]", ether_ntoa(&arp_req->tar_hw));
                 printf(", s_hw [%s]", ether_ntoa(&arp_req->src_hw));
                 printf(", s_ip [%s]", inet_ntoa(arp_req->src_ip));
@@ -219,23 +219,30 @@ int bounce_frame(char *buff, size_t len)
 
                        if(csum16(icmp, icmplen) == 0xffff)
                         {
-                           printf(COLOR_GRN "ETH_TYPE IPv4: ICMP type %hhu, icmplen %zu\n" COLOR_NRM, 
-                                  icmp->type, icmplen);
-
                            if(icmp->type == ICMP_ECHO)
                              {
+                               printf("ETH IPv4 ICMP ECHO_REQ\n");
+
+                               // turn into echo reply
                                icmp->type = ICMP_ECHOREPLY;
-
                                icmp->checksum = 0;
-                               icmp->checksum = csum16(icmp, icmplen);
+                               icmp->checksum = ~csum16(icmp, icmplen);
 
-                               // XXX TODO
-                             }
-                  
+                               // swap ip srd/dst
+                               const in_addr_t tmp_ip = ip->saddr;
+                               ip->saddr = ip->daddr;
+                               ip->daddr = tmp_ip;
+
+                               ip->check = 0;
+                               ip->check = ~csum16(ip, ip->ihl << 2);
+
+                               // XXX TODO check len and timestamps
+                               result = len;
+                            }
                         }
                        else
                         {
-
+                           printf(COLOR_RED "ETH IPv4 ICMP: bad chksum\n" COLOR_NRM);
                         }
                      }
 
@@ -244,10 +251,8 @@ int bounce_frame(char *buff, size_t len)
              }
             else
              {
-               printf(COLOR_RED "len %zu, ETH_TYPE IPv4: ICMP bad chksum\n" COLOR_NRM, len);
-
+               printf(COLOR_RED "ETH IPv4: bad chksum\n" COLOR_NRM);
              }
-
         }
 
 
