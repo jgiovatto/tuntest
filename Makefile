@@ -7,7 +7,7 @@ LIBS = -lpthread
 CXXFLAGS += -W -Wall -O2
 
 ifeq ($(DEBUG),y)
-CPPFLAGS += -DDEBUG -g
+CPPFLAGS += -DDEBUG -g3 -O0
 endif
 
 all : $(BIN)

@@ -33,54 +33,69 @@
 #define COLOR_RED "\033[0;31m"
 #define COLOR_YEL "\033[1;33m"
 
+#define PROTO_ETH COLOR_BLU
+
+#include <vector>
+
+struct Color {
+  Color(const char * c) : c_(c) { }
+
+  const char * c_;
+};
+
+using Colors = std::vector<Color>;
+
+
 bool bRunning = true;
 
-void die(const char *msg)
+void bye(const char *msg)
 {
     perror(msg);
     exit(0);
 }
 
 
-void print_hex(const char * buff, size_t bufflen)
+void print_hex(const char * buff, size_t bufflen, const Colors & colors)
 {
+    const  size_t lineLen = 16;
+
     size_t linenum = 0;
-    int     numrem = bufflen;
+    size_t pos = 0;
 
-    while(numrem > 0)
+    while(pos < bufflen)
     {
-        char str1[128] = {0};
-        char str2[128] = {0};
+        struct Str {
+          size_t pos;
+          char   buf[128];
+          Str() : pos(0), buf{0} { } 
+        }s1, s2;
 
-        size_t pos1 = 0, pos2 = 0;
-        for(size_t i = 0; i < 16; ++i)
+        for(size_t idx = 0; idx < lineLen; ++idx, ++pos)
         {
-            // space every 8
-            if(i != 0 && i % 8 == 0)
+            if((idx != 0) && (idx % (lineLen / 2) == 0))
             {
-                pos1 += snprintf(str1 + pos1, sizeof(str1) - pos1, "  ");
+                s1.pos += snprintf(s1.buf + s1.pos, sizeof(s1.buf) - s1.pos, " ");
+                s2.pos += snprintf(s2.buf + s2.pos, sizeof(s2.buf) - s2.pos, " ");
             }
 
             // have value
-            if(numrem > 0)
+            if(pos < bufflen)
             {
-                const char val = buff[linenum * 16 + i];
+                const char val = buff[pos];
 
                 // as hex
-                pos1 += snprintf(str1 + pos1, sizeof(str1) - pos1, "%02hhx ", (uint8_t) val);
+                s1.pos += snprintf(s1.buf + s1.pos, sizeof(s1.buf) - s1.pos, "%s%02hhx ", colors[pos].c_, (uint8_t) val);
 
                 // as printable
-                pos2 += snprintf(str2 + pos2, sizeof(str2) - pos2, "%c", isprint(val) ? val : '.');
+                s2.pos += snprintf(s2.buf + s2.pos, sizeof(s2.buf) - s2.pos, "%c", isprint(val) ? val : '.');
             }
             else
             {
                 // fill the last line
-                pos2 += snprintf(str2 + pos2, sizeof(str2) - pos2, " ");
+                s2.pos += snprintf(s2.buf + s2.pos, sizeof(s2.buf) - s2.pos, " ");
             }
-
-            --numrem;
         }
-        printf("%03zu  %s    %s\n", linenum * 16, str2, str1);
+        printf("%03zu  %s    %s\n", linenum * lineLen, s2.buf, s1.buf);
 
         ++linenum;
     }
@@ -119,6 +134,8 @@ int bounce_frame(char *buff, size_t len)
 {
     int result = 0;
 
+    Colors colors(len, Color(COLOR_NRM));
+
     if(len > sizeof(ether_header))
     {
         // make up nbr
@@ -130,6 +147,9 @@ int bounce_frame(char *buff, size_t len)
 
         const uint16_t ether_type = htons(eth->ether_type);
 
+        colors[12].c_ = COLOR_YEL;
+        colors[13].c_ = COLOR_YEL;
+
         // sanity check for eth arp
         if((len == sizeof(struct ether_header) + sizeof(struct arphdr) + (2 * (ETH_ALEN + 4))) && 
            (ether_type == ETHERTYPE_ARP))
@@ -137,7 +157,7 @@ int bounce_frame(char *buff, size_t len)
             size_t offset = sizeof(ether_header);
 
             struct arphdr * arp = (struct arphdr*) (buff + offset);
-            
+       
             if((ntohs(arp->ar_op)  == ARPOP_REQUEST) &&
                (ntohs(arp->ar_hrd) == ARPHRD_ETHER)  &&
                (ntohs(arp->ar_pro) == ETHERTYPE_IP)  &&
@@ -202,9 +222,9 @@ int bounce_frame(char *buff, size_t len)
 
             struct iphdr * ip = (struct iphdr*) (buff + offset);
 
-            // XXX TODO reply to icmp
-            print_hex(buff, len);
-
+            colors[14].c_ = COLOR_GRN;
+            colors[23].c_ = COLOR_GRN;
+ 
             if(csum16(ip, ip->ihl << 2) == 0xffff)
              {
                 switch(ip->protocol)
@@ -221,7 +241,7 @@ int bounce_frame(char *buff, size_t len)
                         {
                            if(icmp->type == ICMP_ECHO)
                              {
-                               printf("ETH IPv4 ICMP ECHO_REQ\n");
+                               printf("ETH IPv4 ICMP ECHO_REQ seq %hu\n", ntohs(icmp->un.echo.sequence));
 
                                // turn into echo reply
                                icmp->type = ICMP_ECHOREPLY;
@@ -232,6 +252,15 @@ int bounce_frame(char *buff, size_t len)
                                const in_addr_t tmp_ip = ip->saddr;
                                ip->saddr = ip->daddr;
                                ip->daddr = tmp_ip;
+
+
+                               struct
+                                {
+                                 uint32_t otime;
+                                 uint32_t rtime;
+                                 uint32_t ttime;
+                                } id_ts;
+
 
                                ip->check = 0;
                                ip->check = ~csum16(ip, ip->ihl << 2);
@@ -263,7 +292,10 @@ int bounce_frame(char *buff, size_t len)
          memcpy(&eth->ether_dhost, &eth->ether_shost, ETH_ALEN);
          memcpy(&eth->ether_shost, &faux_nbr, ETH_ALEN);
        }
+
+       print_hex(buff, len, colors);
     }
+
 
    return result;
 }
@@ -278,31 +310,31 @@ int main(int, char *[])
     // open
     if(tunTap.open("/dev/net/tun", "tuntap0", IFF_TAP | IFF_NO_PI) < 0)
     {
-        die("tun open");
+        bye("tun open");
     }
 
     // set ip addr
     if(tunTap.set_ip_address(inet_addr("172.16.1.1"), 24) < 0)
     {
-        die("tun set ip");
+        bye("tun set ip");
     }
 
     // set hw addr
     if(tunTap.set_hw_address(ether_aton("02:02:00:00:00:01")) < 0)
     {
-        die("tun set ip");
+        bye("tun set ip");
     }
 
     // set up, arp on
     if(tunTap.activate(true, true) < 0)
     {
-        die("tun activate");
+        bye("tun activate");
     }
 
     // set read blocking
     if(tunTap.set_blocking(true) < 0)
     {
-        die("tun setblocking");
+        bye("tun setblocking");
     }
 
     while(bRunning)
@@ -313,7 +345,7 @@ int main(int, char *[])
 
         if(num_read < 0)
         {
-            die("tun read");
+            bye("tun read");
         }
         else
         {
