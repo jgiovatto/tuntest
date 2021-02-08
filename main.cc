@@ -148,7 +148,7 @@ uint16_t csum16v(const struct iovec * iov, const size_t iovn)
 }
 
 
-int parse_frame(char *buff, size_t len)
+int parse_frame(char *buff, size_t len, const struct timeval & tv)
 {
     Colors colors(len, Color(COLOR_NRM));
 
@@ -244,16 +244,16 @@ int parse_frame(char *buff, size_t len)
                              {
                                printf("ETH IPv4 ICMP ECHO_REQ seq %hu", ntohs(icmp->un.echo.sequence));
 
-                               if(icmplen >= (sizeof(icmphdr) + 8))
+                               if(icmplen >= (sizeof(icmphdr) + sizeof(struct timeval)))
                                  {
-                                   // see icmp.c 
+                                   // see man ping
                                    struct ts_ {
-                                     uint32_t otime;
-                                     uint32_t ttime;
-                                     uint32_t rtime;
+                                     struct timeval tv;
                                    } __attribute__((packed))* ts = (struct ts_*) (icmp + 1);
 
-                                   printf("otime 0x%08x, ttime 0x%08x, rtime 0x%08x\n", ts->otime, ts->ttime, ts->rtime);
+                                   printf(", now %ld:%06ld, ts %ld:%06ld\n", 
+                                         tv.tv_sec, tv.tv_usec, 
+                                         htole64(ts->tv.tv_sec), htole64(ts->tv.tv_usec));
                                  }
                                else
                                  {
@@ -411,7 +411,7 @@ int build_udp(char *buff, size_t bufflen)
 
    print_hex(buff, offset, colors);
 
-   return 0;
+   return offset;
 }
 
 
@@ -451,6 +451,8 @@ int main(int, char *[])
         bye("tun setblocking");
      }
 
+    struct timeval tv;
+
     while(bRunning)
      {
        char buff[2048] = {0};
@@ -459,7 +461,9 @@ int main(int, char *[])
 
        if(num_read > 0) 
          {
-           const int num_write = parse_frame(buff, num_read);
+           gettimeofday(&tv, NULL);
+
+           const int num_write = parse_frame(buff, num_read, tv);
 
            if(num_write > 0)
             {
@@ -468,10 +472,10 @@ int main(int, char *[])
          }
        else
          {
-           // make soemthing up
+           // make something up
            const int num_write = build_udp(buff, sizeof(buff));
 
-          if(num_write > 0)
+           if(num_write > 0)
            {
              tunTap.write(buff, num_write);
            }
