@@ -234,7 +234,7 @@ int parse_frame(char *buff, size_t len)
                  {
                     case IPPROTO_ICMP:
                      {
-                       struct icmphdr * icmp = (struct icmphdr *)(buff + (ip->ihl << 2) + sizeof(ether_header));
+                       struct icmphdr * icmp = (struct icmphdr *)(buff + sizeof(ether_header) + (ip->ihl << 2));
 
                        const size_t icmplen = ntohs(ip->tot_len) - (ip->ihl << 2);
 
@@ -242,13 +242,23 @@ int parse_frame(char *buff, size_t len)
                         {
                            if(icmp->type == ICMP_ECHO)
                              {
-                               struct {
-                                 uint32_t otime;
-                                 uint32_t rtime;
-                                 uint32_t ttime;
-                                } id_ts; // XXX TODO check/set timestamps
+                               printf("ETH IPv4 ICMP ECHO_REQ seq %hu", ntohs(icmp->un.echo.sequence));
 
-                               printf("ETH IPv4 ICMP ECHO_REQ seq %hu\n", ntohs(icmp->un.echo.sequence));
+                               if(icmplen >= (sizeof(icmphdr) + 8))
+                                 {
+                                   // see icmp.c 
+                                   struct ts_ {
+                                     uint32_t otime;
+                                     uint32_t ttime;
+                                     uint32_t rtime;
+                                   } __attribute__((packed))* ts = (struct ts_*) (icmp + 1);
+
+                                   printf("otime 0x%08x, ttime 0x%08x, rtime 0x%08x\n", ts->otime, ts->ttime, ts->rtime);
+                                 }
+                               else
+                                 {
+                                   printf("\n");
+                                 }
 
                                // turn into echo reply
                                icmp->type = ICMP_ECHOREPLY;
@@ -401,7 +411,7 @@ int build_udp(char *buff, size_t bufflen)
 
    print_hex(buff, offset, colors);
 
-   return offset;
+   return 0;
 }
 
 
