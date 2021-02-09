@@ -4,7 +4,7 @@ OBJ = tuntap.o  main.o
 BIN = tuntest
 LIBS = -lpthread
 
-CXXFLAGS += -W -Wall -O2
+CXXFLAGS += -W -Wall -O2 --std=c++11
 
 ifeq ($(DEBUG),y)
 CPPFLAGS += -DDEBUG -g3 -O0
