@@ -50,7 +50,8 @@ const char * ripHW    = "01:00:5e:00:00:09";
 const char * nbrIP = "172.16.0.99";
 const char * nbrHW = "02:02:00:00:00:63";
 
-const char * rmtIP = "172.16.1.99";
+// faux nbr attached network
+const char * rmtIP = "172.16.99.0";
 const char * rmtNW = "255.255.255.0";
 
 // add some color to our logs
@@ -485,7 +486,7 @@ int main(int, char *[])
              tunTap.write(buff, num_write);
            }
 
-          sleep(1);
+          sleep(10);
         }
     }
 
