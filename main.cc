@@ -18,6 +18,7 @@
 
 #include <arpa/inet.h>
 #include <netinet/ip.h>
+#include <netinet/udp.h>
 #include <netinet/in.h>
 #include <netinet/ether.h>
 #include <netinet/ip_icmp.h>
@@ -37,12 +38,20 @@
 
 #include <vector>
 
-// local/remote ip and hardware interface addrs
+// our addrs
 const char * localIP  = "172.16.0.1";
 const char * localHW  = "02:02:00:00:00:01";
 
-const char * remoteIP = "172.16.0.99";
-const char * remoteHW = "02:02:00:00:00:63";
+// ripv2 addrs
+const char * ripIP    = "224.0.0.9";
+const char * ripHW    = "01:00:5e:00:00:09";
+
+// faux nbr addrs
+const char * nbrIP = "172.16.0.99";
+const char * nbrHW = "02:02:00:00:00:63";
+
+const char * rmtIP = "172.16.1.99";
+const char * rmtNW = "255.255.255.0";
 
 // add some color to our logs
 struct Color {
@@ -148,7 +157,7 @@ uint16_t csum16v(const struct iovec * iov, const size_t iovn)
 }
 
 
-int parse_frame(char *buff, size_t len, const struct timeval & tv)
+int parse_frame(char *buff, size_t len)
 {
     Colors colors(len, Color(COLOR_NRM));
 
@@ -199,8 +208,8 @@ int parse_frame(char *buff, size_t len, const struct timeval & tv)
                 arp_req->src_ip = tmp_ip;
 
                 // swap src/target hw addrs
-                memcpy(&arp_req->tar_hw, &arp_req->src_hw,     ETH_ALEN);
-                memcpy(&arp_req->src_hw, ether_aton(remoteHW), ETH_ALEN);
+                memcpy(&arp_req->tar_hw, &arp_req->src_hw,  ETH_ALEN);
+                memcpy(&arp_req->src_hw, ether_aton(nbrHW), ETH_ALEN); // faux nbr
             
                 // set as reply   
                 arp->ar_op = htons(ARPOP_REPLY);
@@ -242,23 +251,18 @@ int parse_frame(char *buff, size_t len, const struct timeval & tv)
                         {
                            if(icmp->type == ICMP_ECHO)
                              {
-                               printf("ETH IPv4 ICMP ECHO_REQ seq %hu", ntohs(icmp->un.echo.sequence));
-
+#ifdef DEBUG
                                if(icmplen >= (sizeof(icmphdr) + sizeof(struct timeval)))
                                  {
                                    // see man ping
                                    struct ts_ {
                                      struct timeval tv;
                                    } __attribute__((packed))* ts = (struct ts_*) (icmp + 1);
-
-                                   printf(", now %ld:%06ld, ts %ld:%06ld\n", 
-                                         tv.tv_sec, tv.tv_usec, 
-                                         htole64(ts->tv.tv_sec), htole64(ts->tv.tv_usec));
+                                   printf("ETH IPv4 ICMP ECHO_REQ seq %hu, ts %ld:%06ld\n", 
+                                          ntohs(icmp->un.echo.sequence),
+                                          htole64(ts->tv.tv_sec), htole64(ts->tv.tv_usec));
                                  }
-                               else
-                                 {
-                                   printf("\n");
-                                 }
+#endif
 
                                // turn into echo reply
                                icmp->type = ICMP_ECHOREPLY;
@@ -298,8 +302,8 @@ int parse_frame(char *buff, size_t len, const struct timeval & tv)
       if(result > 0)
        {
          // swap eth src/dst
-         memcpy(&eth->ether_dhost, &eth->ether_shost,    ETH_ALEN);
-         memcpy(&eth->ether_shost, ether_aton(remoteHW), ETH_ALEN);
+         memcpy(&eth->ether_dhost, &eth->ether_shost, ETH_ALEN);
+         memcpy(&eth->ether_shost, ether_aton(nbrHW), ETH_ALEN); // faux nbr
        }
 
        print_hex(buff, len, colors);
@@ -309,109 +313,115 @@ int parse_frame(char *buff, size_t len, const struct timeval & tv)
 }
 
 
-
-int build_udp(char *buff, size_t bufflen)
+/*
+ * IP (tos 0x0, ttl 1, id 0, offset 0, flags [none], proto UDP (17), length 52)
+ *   172.16.0.99.520 > 224.0.0.9.520: [udp sum ok] 
+ *	RIPv2, Request, length: 24, routes: 1 or less
+ *	  AFI IPv4,     172.16.1.99/24, tag 0x0000, metric: 1, next-hop: self
+ *	0x0000:  0102 0000 0002 0000 ac10 0163 ffff ff00
+ *	0x0010:  0000 0000 0000 0001
+ */
+size_t build_rip(char * buff, size_t bufflen)
 {
    Colors colors(bufflen, Color(COLOR_NRM));
 
    memset(buff, 0x0, bufflen);
+
+   static uint8_t id = 0;
+
+   auto eth = (struct ether_header *)  buff;
+   auto ip  = (struct iphdr *)        (buff + 14);
+   auto udp = (struct udphdr *)       (buff + 34);
+
+   struct rip_entry_t {
+     uint16_t family, tag;
+     uint32_t addr, mask, next, metric;
+  
+     rip_entry_t() :
+      family(htons(2)),
+      tag(htons(id)),
+      addr(id == 0 ? inet_addr("0.0.0.0") : inet_addr(rmtIP)), // faux rmt network
+      mask(id == 0 ? inet_addr("0.0.0.0") : inet_addr(rmtNW)), // faux fmt netmask
+      next(0),                // implies self
+      metric(htonl(id == 0 ? 16: 1))
+      { }
+    }__attribute__((packed));
+
+   struct riphdr {
+     uint8_t     command, version;
+     uint16_t    mbz;
+     rip_entry_t entry[1];
+
+     riphdr() : 
+      command(id == 0 ? 1 : 2),
+      version(2),
+      mbz(0)
+     { }
+   } __attribute__((packed)) rip;
+
+   memcpy(buff + 42, &rip, sizeof(rip));
+
+   // bump rip id
+   ++id;
  
-   struct ether_header eth;
+   // udp header and data len
+   const uint16_t udplen = sizeof(*udp) + sizeof(rip);
 
-   // set eth src/dst
-   memcpy(&eth.ether_dhost, ether_aton(localHW),  ETH_ALEN); // local
-   memcpy(&eth.ether_shost, ether_aton(remoteHW), ETH_ALEN); // remote
+   // set eth hdr
+   memcpy(&eth->ether_dhost, ether_aton(ripHW), ETH_ALEN); // ripv2
+   memcpy(&eth->ether_shost, ether_aton(nbrHW), ETH_ALEN); // faux nbr
+   eth->ether_type = htons(ETHERTYPE_IP);
 
-   eth.ether_type = htons(ETHERTYPE_IP);
-
-   // eth proto colors
    colors[12].c_ = COLOR_YEL;
    colors[13].c_ = COLOR_YEL;
 
-   // udp payload 
-   const char * msg = "hello";
+   // set ip hdr
+   ip->version  = 4;
+   ip->ihl      = 5;
+   ip->tos      = 0;
+   ip->tot_len  = htons((ip->ihl << 2) + udplen);
+   ip->id       = htons(0);
+   ip->frag_off = htons(0);
+   ip->ttl      = 1;
+   ip->protocol = IPPROTO_UDP;
+   ip->check    = htons(0);
+   ip->saddr    = inet_addr(nbrIP);  // faux nbr
+   ip->daddr    = inet_addr(ripIP);     // ripv2
+   // ip csum
+   ip->check = ~csum16(ip, ip->ihl << 2);
 
-   // udp header and data len
-   const uint16_t udplen = 8 + strlen(msg);
-
-   // udp header
-   struct {
-      uint16_t sport;
-      uint16_t dport;
-      uint16_t len;
-      uint16_t sum;
-    } __attribute__((packed)) udp = {htons(0x1000), 
-                                     htons(0x1000), 
-                                     htons(udplen),
-                                     0};
-
-   // udp payload colors
-   for(size_t n = 0; n < strlen(msg); ++n)
-     {
-       colors[42 + n] = COLOR_CYN;
-     }
+   colors[14].c_ = COLOR_GRN;
+   colors[23].c_ = COLOR_GRN;
  
+   // set udp hdr
+   udp->source = htons(520); // rip port
+   udp->dest   = htons(520); // rip port
+   udp->len    = htons(udplen);
+   udp->check  = 0;
+
    // udp pseudo sum
    struct {
      uint32_t src, dst;
      uint8_t  res, proto;
      uint16_t len;
-   } __attribute__((packed)) psum = {inet_addr(remoteIP), // remote
-                                     inet_addr(localIP),  // local
+   } __attribute__((packed)) psum = {ip->saddr,
+                                     ip->daddr,
                                      0,
-                                     IPPROTO_UDP,
+                                     ip->protocol,
                                      htons(udplen)};
 
-   
-   struct iphdr ip;
-   ip.version  = 4;
-   ip.ihl      = 5;
-   ip.tos      = 0;
-   ip.tot_len  = htons((ip.ihl << 2) + udplen);
-   ip.id       = htons(0);
-   ip.frag_off = htons(0);
-   ip.ttl      = 1;
-   psum.proto  = ip.protocol = IPPROTO_UDP;
-   ip.check    = htons(0);
-   psum.src    = ip.saddr = inet_addr(remoteIP);
-   psum.dst    = ip.daddr = inet_addr(localIP);
-
-
-   const struct iovec iov[3] = {{(void*)&psum, sizeof(psum)}, 
-                                {(void*)&udp,  sizeof(udp)},
-                                {(void*)msg,   strlen(msg)}};
+   const struct iovec chkv[3] = {{(void*)&psum, sizeof(psum)}, 
+                                 {(void*)udp,   sizeof(*udp)},
+                                 {(void*)&rip,  sizeof(rip)}};
 
    // udp csum
-   udp.sum = ~csum16v(iov, 3);
+   udp->check = ~csum16v(chkv, 3);
 
-   // ip csum
-   ip.check = ~csum16(&ip, ip.ihl << 2);
+   const size_t result = sizeof(*eth) + sizeof(*ip) + sizeof(*udp) + sizeof(rip);
 
-   colors[14].c_ = COLOR_GRN;
-   colors[23].c_ = COLOR_GRN;
+   print_hex(buff, result, colors);
 
-   // load the segments, could use iovec here but print_hex isnt that good yet.
-   int offset = 0;
-
-   // eth
-   memcpy(buff + offset, &eth, sizeof(eth));
-   offset += sizeof(eth);
- 
-   // ip
-   memcpy(buff + offset, &ip, sizeof(ip));
-   offset += sizeof(ip);
-
-   // udp
-   memcpy(buff + offset, &udp, sizeof(udp));
-   offset += sizeof(udp);
-
-   // udp data/payload
-   memcpy(buff + offset, msg, strlen(msg));
-   offset += strlen(msg);
-
-   print_hex(buff, offset, colors);
-
-   return offset;
+   return result;
 }
 
 
@@ -451,8 +461,6 @@ int main(int, char *[])
         bye("tun setblocking");
      }
 
-    struct timeval tv;
-
     while(bRunning)
      {
        char buff[2048] = {0};
@@ -461,9 +469,7 @@ int main(int, char *[])
 
        if(num_read > 0) 
          {
-           gettimeofday(&tv, NULL);
-
-           const int num_write = parse_frame(buff, num_read, tv);
+           const int num_write = parse_frame(buff, num_read);
 
            if(num_write > 0)
             {
@@ -472,9 +478,8 @@ int main(int, char *[])
          }
        else
          {
-           // make something up
-           const int num_write = build_udp(buff, sizeof(buff));
-
+           const size_t num_write = build_rip(buff, sizeof(buff));
+           
            if(num_write > 0)
            {
              tunTap.write(buff, num_write);
