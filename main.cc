@@ -28,6 +28,8 @@
 
 #include "tuntap.h"
 
+#include <vector>
+
 #define COLOR_NRM "\033[0m"
 #define COLOR_BLE "\033[0;34m"
 #define COLOR_GRN "\033[0;32m"
@@ -35,24 +37,39 @@
 #define COLOR_RED "\033[0;31m"
 #define COLOR_YEL "\033[1;33m"
 
-
-#include <vector>
-
-// our addrs
-const char * localIP  = "172.16.0.1";
-const char * localHW  = "02:02:00:00:00:01";
-
 // ripv2 addrs
-const char * ripIP    = "224.0.0.9";
-const char * ripHW    = "01:00:5e:00:00:09";
+const char *   ripIP   = "224.0.0.9";
+const char *   ripHW   = "01:00:5e:00:00:09";
+const uint16_t ripPort = 520;
+const char *   anyIP   = "0.0.0.0";
 
-// faux nbr addrs
+// our tuntap addrs
+const char * localIP = "172.16.0.1";
+const char * localHW = "02:02:00:00:00:01";
+
+// faux nbr addrs 
 const char * nbrIP = "172.16.0.99";
 const char * nbrHW = "02:02:00:00:00:63";
 
-// faux nbr attached network
+// faux nbr lan
 const char * rmtIP = "172.16.99.0";
 const char * rmtNW = "255.255.255.0";
+
+
+/*
+ *   this demo gives the illusion of the following topology
+ *
+ *
+ *  |------- local IP stack -------|               |---------  faux nbr IP stack ------------|
+ *  |                              |               |                                         |
+ *  | eth0       tuntap0           |               |     eth0                     eth1       |
+ *  |            172.16.0.1        |               |  172.16.0.99             172.16.99.0/24 |
+ *  |            02:02:00:00:00:01 |               |  02:02:00:00:00:63                      |
+ *                   |                                     |
+ *                   |                                     |
+ *                   |------------172.16.0.0/24----------- | 
+ */
+
 
 // add some color to our logs
 struct Color {
@@ -103,7 +120,7 @@ void print_hex(const char * buff, size_t const bufflen, const Colors & colors)
                 // as hex
                 strHex.pos += snprintf(strHex.buf + strHex.pos, sizeof(strHex.buf) - strHex.pos, "%s%02hhx ", colors[pos].c_, (uint8_t) val);
 
-                // as printable
+                // as txt
                 strTxt.pos += snprintf(strTxt.buf + strTxt.pos, sizeof(strTxt.buf) - strTxt.pos, "%c", isalnum(val) ? val : '.');
             }
             else
@@ -340,10 +357,10 @@ size_t build_rip(char * buff, size_t bufflen)
   
      rip_entry_t() :
       family(htons(2)),
-      tag(htons(id)),
-      addr(id == 0 ? inet_addr("0.0.0.0") : inet_addr(rmtIP)), // faux rmt network
-      mask(id == 0 ? inet_addr("0.0.0.0") : inet_addr(rmtNW)), // faux fmt netmask
-      next(0),                // implies self
+      tag(0),
+      addr(id == 0 ? inet_addr(anyIP) : inet_addr(rmtIP)), // faux rmt network
+      mask(id == 0 ? inet_addr(anyIP) : inet_addr(rmtNW)), // faux rmt netmask
+      next(inet_addr(anyIP)),                              // implies self
       metric(htonl(id == 0 ? 16: 1))
       { }
     }__attribute__((packed));
@@ -395,8 +412,8 @@ size_t build_rip(char * buff, size_t bufflen)
    colors[23].c_ = COLOR_GRN;
  
    // set udp hdr
-   udp->source = htons(520); // rip port
-   udp->dest   = htons(520); // rip port
+   udp->source = htons(ripPort); // rip port
+   udp->dest   = htons(ripPort); // rip port
    udp->len    = htons(udplen);
    udp->check  = 0;
 
@@ -486,7 +503,7 @@ int main(int, char *[])
              tunTap.write(buff, num_write);
            }
 
-          sleep(10);
+          sleep(1);
         }
     }
 
