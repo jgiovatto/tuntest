@@ -17,7 +17,7 @@ public:
 
     ~TunTap();
 
-    int open(const char *, const char *, int);
+    int open(const std::string, const std::string, int);
 
     int close();
 
@@ -36,6 +36,8 @@ public:
     int set_ip_address(uint32_t, size_t);
 
     int set_hw_address(const struct ether_addr * addr);
+
+    int get_handle() const;
 
 private:
     int i_tunfd_;

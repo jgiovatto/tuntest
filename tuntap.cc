@@ -57,7 +57,7 @@ TunTap::~TunTap()
 }
 
 int
-TunTap::open(const char *path, const char *dev, int flags)
+TunTap::open(const std::string path, const std::string dev, int flags)
 {
     if((i_ctrl_sock_ = socket(AF_INET, SOCK_DGRAM, 0)) < 0)
     {
@@ -65,7 +65,7 @@ TunTap::open(const char *path, const char *dev, int flags)
         return -1;
     }
 
-    i_tunfd_ = ::open(path, O_RDWR);
+    i_tunfd_ = ::open(path.c_str(), O_RDWR);
 
     if(i_tunfd_ < 0)
     {
@@ -76,7 +76,7 @@ TunTap::open(const char *path, const char *dev, int flags)
     struct ifreq ifr;
     memset(&ifr, 0, sizeof(ifr));
 
-    strncpy(ifr.ifr_name, dev, IFNAMSIZ - 1);
+    strncpy(ifr.ifr_name, dev.c_str(), IFNAMSIZ - 1);
     ifr.ifr_flags = flags;
 
     if(ioctl(i_tunfd_, TUNSETIFF, &ifr) < 0)
@@ -86,7 +86,7 @@ TunTap::open(const char *path, const char *dev, int flags)
     }
     else
     {
-        s_devname_ = dev;
+        s_devname_ = dev.c_str();
     }
 
     return i_tunfd_;
@@ -165,6 +165,12 @@ int TunTap::activate(bool up, bool arp)
         return set_flags_(flags, -1);
     }
 }
+
+int TunTap::get_handle() const
+{
+    return i_tunfd_;
+}
+
 
 
 int TunTap::set_flags_(int newflags, int cmd)

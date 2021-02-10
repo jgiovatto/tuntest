@@ -10,6 +10,7 @@
 #include <string.h>
 #include <errno.h>
 #include <unistd.h>
+#include <signal.h>
 
 #include <sys/types.h>
 #include <sys/time.h>
@@ -43,10 +44,6 @@ const char *   ripHW   = "01:00:5e:00:00:09";
 const uint16_t ripPort = 520;
 const char *   anyIP   = "0.0.0.0";
 
-// our tuntap addrs
-const char * localIP = "172.16.0.1";
-const char * localHW = "02:02:00:00:00:01";
-
 // faux nbr addrs 
 const char * nbrIP = "172.16.0.99";
 const char * nbrHW = "02:02:00:00:00:63";
@@ -62,8 +59,8 @@ const char * rmtNW = "255.255.255.0";
  *
  *  |------- local IP stack -------|               |---------  faux nbr IP stack ------------|
  *  |                              |               |                                         |
- *  | eth0       tuntap0           |               |     eth0                     eth1       |
- *  |            172.16.0.1        |               |  172.16.0.99             172.16.99.0/24 |
+ *  | eth0       tuntap1           |               |     eth0                     eth1       |
+ *  |            172.16.1.1        |               |  172.16.0.99             172.16.99.0/24 |
  *  |            02:02:00:00:00:01 |               |  02:02:00:00:00:63                      |
  *                   |                                     |
  *                   |                                     |
@@ -80,17 +77,27 @@ struct Color {
 using Colors = std::vector<Color>;
 
 
-bool bRunning = true;
+volatile bool bRunning = true;
 
 
-void bye(const char *msg)
+static void bye(const char *msg)
 {
     perror(msg);
     exit(0);
 }
 
 
-void print_hex(const char * buff, size_t const bufflen, const Colors & colors)
+static const char * fmt_str(const char * fmt, char * const str, const size_t strlen, const uint8_t val)
+{
+    memset(str, 0x0, strlen);
+
+    snprintf(str, strlen - 1, fmt, val);
+
+    return str;
+}
+
+
+static void print_hex(const char * buff, size_t const bufflen, const Colors & colors)
 {
     const size_t lineLen = 16;
 
@@ -139,7 +146,7 @@ void print_hex(const char * buff, size_t const bufflen, const Colors & colors)
 }
 
 
-uint16_t csum16(const void *buff, uint16_t len, uint16_t carry = 0)
+static uint16_t csum16(const void *buff, uint16_t len, uint16_t carry = 0)
 {
   uint32_t sum = carry;
 
@@ -162,7 +169,7 @@ uint16_t csum16(const void *buff, uint16_t len, uint16_t carry = 0)
 }
 
 
-uint16_t csum16v(const struct iovec * iov, const size_t iovn)
+static uint16_t csum16v(const struct iovec * iov, const size_t iovn)
 {
   uint16_t sum = 0;
 
@@ -175,161 +182,6 @@ uint16_t csum16v(const struct iovec * iov, const size_t iovn)
 }
 
 
-int parse_frame(char *buff, size_t len)
-{
-    Colors colors(len, Color(COLOR_NRM));
-
-    int result = 0;
-
-    if(len > sizeof(ether_header))
-    {
-        struct ether_header * eth = (struct ether_header *) buff;
-
-        const uint16_t ether_type = htons(eth->ether_type);
-
-        colors[12].c_ = COLOR_YEL;
-        colors[13].c_ = COLOR_YEL;
-
-        // sanity check for eth arp eth/ipv4
-        if((len == sizeof(struct ether_header) + sizeof(struct arphdr) + (2 * (ETH_ALEN + 4))) && 
-           (ether_type == ETHERTYPE_ARP))
-        {
-            struct arphdr * arp = (struct arphdr*) (eth + 1);
-       
-            if((ntohs(arp->ar_op)  == ARPOP_REQUEST) &&
-               (ntohs(arp->ar_hrd) == ARPHRD_ETHER)  &&
-               (ntohs(arp->ar_pro) == ETHERTYPE_IP)  &&
-               (arp->ar_hln        == ETH_ALEN)      &&
-               (arp->ar_pln        == 4))
-            {
-                struct arp_ipv4_req_ {
-                    struct ether_addr src_hw;
-                    in_addr           src_ip;
-
-                    struct ether_addr tar_hw;
-                    in_addr           tar_ip;
-                } __attribute__((packed)) * arp_req = (struct arp_ipv4_req_ *) (arp + 1);
-
-#ifdef DEBUG
-                printf(COLOR_YEL "in  ETH ARP:");
-                printf("t_hw [%s]",   ether_ntoa(&arp_req->tar_hw));
-                printf(", s_hw [%s]", ether_ntoa(&arp_req->src_hw));
-
-                printf(", s_ip [%s]", inet_ntoa(arp_req->src_ip));
-                printf(", t_ip [%s]", inet_ntoa(arp_req->tar_ip));
-                printf("\n" COLOR_NRM);
-#endif
-
-                // swap src/target ip addrs
-                const in_addr tmp_ip = arp_req->tar_ip;
-                arp_req->tar_ip = arp_req->src_ip;
-                arp_req->src_ip = tmp_ip;
-
-                // swap src/target hw addrs
-                memcpy(&arp_req->tar_hw, &arp_req->src_hw,  ETH_ALEN);
-                memcpy(&arp_req->src_hw, ether_aton(nbrHW), ETH_ALEN); // faux nbr
-            
-                // set as reply   
-                arp->ar_op = htons(ARPOP_REPLY);
-
-#ifdef DEBUG
-                printf(COLOR_YEL "out ETH ARP:");
-                printf("t_hw [%s]",   ether_ntoa(&arp_req->tar_hw));
-                printf(", s_hw [%s]", ether_ntoa(&arp_req->src_hw));
-
-                printf(", s_ip [%s]", inet_ntoa(arp_req->src_ip));
-                printf(", t_ip [%s]", inet_ntoa(arp_req->tar_ip));
-                printf("\n" COLOR_NRM);
-#endif
-
-                // return complete arp reply
-                result = len;
-            }
-        }
-        // sanity check for eth/ipv4
-        else if((len > sizeof(struct iphdr)) && (ether_type == ETHERTYPE_IP))
-        {
-            struct iphdr * ip = (struct iphdr*) (eth + 1);
-
-            // set ip colors
-            colors[14].c_ = COLOR_GRN;
-            colors[23].c_ = COLOR_GRN;
- 
-            if(csum16(ip, ip->ihl << 2) == 0xffff)
-             {
-                switch(ip->protocol)
-                 {
-                    case IPPROTO_ICMP:
-                     {
-                       struct icmphdr * icmp = (struct icmphdr *)(buff + sizeof(ether_header) + (ip->ihl << 2));
-
-                       const size_t icmplen = ntohs(ip->tot_len) - (ip->ihl << 2);
-
-                       if(csum16(icmp, icmplen) == 0xffff)
-                        {
-                           if(icmp->type == ICMP_ECHO)
-                             {
-#ifdef DEBUG
-                               if(icmplen >= (sizeof(icmphdr) + sizeof(struct timeval)))
-                                 {
-                                   // see man ping
-                                   struct ts_ {
-                                     struct timeval tv;
-                                   } __attribute__((packed))* ts = (struct ts_*) (icmp + 1);
-                                   printf("ETH IPv4 ICMP ECHO_REQ seq %hu, ts %ld:%06ld\n", 
-                                          ntohs(icmp->un.echo.sequence),
-                                          htole64(ts->tv.tv_sec), htole64(ts->tv.tv_usec));
-                                 }
-#endif
-
-                               // turn into echo reply
-                               icmp->type = ICMP_ECHOREPLY;
-
-                               // icmp checksum
-                               icmp->checksum = 0;
-                               icmp->checksum = ~csum16(icmp, icmplen);
-
-                               // swap ip srd/dst
-                               const in_addr_t tmp_ip = ip->saddr;
-                               ip->saddr = ip->daddr;
-                               ip->daddr = tmp_ip;
- 
-                               // ip checksum
-                               ip->check = 0;
-                               ip->check = ~csum16(ip, ip->ihl << 2);
-
-                               result = len;
-                            }
-                        }
-                       else
-                        {
-                           printf(COLOR_RED "ETH IPv4 ICMP: bad chksum\n" COLOR_NRM);
-                        }
-                     }
-
-                    break;
-                 }
-             }
-            else
-             {
-               printf(COLOR_RED "ETH IPv4: bad chksum\n" COLOR_NRM);
-             }
-        }
-
-      // something to send back
-      if(result > 0)
-       {
-         // swap eth src/dst
-         memcpy(&eth->ether_dhost, &eth->ether_shost, ETH_ALEN);
-         memcpy(&eth->ether_shost, ether_aton(nbrHW), ETH_ALEN); // faux nbr
-       }
-
-       print_hex(buff, len, colors);
-    }
-
-   return result;
-}
-
 
 /*
  * IP (tos 0x0, ttl 1, id 0, offset 0, flags [none], proto UDP (17), length 52)
@@ -339,7 +191,7 @@ int parse_frame(char *buff, size_t len)
  *	0x0000:  0102 0000 0002 0000 ac10 0163 ffff ff00
  *	0x0010:  0000 0000 0000 0001
  */
-size_t build_rip(char * buff, size_t bufflen)
+static size_t build_rip(char * buff, size_t bufflen)
 {
    Colors colors(bufflen, Color(COLOR_NRM));
 
@@ -444,66 +296,285 @@ size_t build_rip(char * buff, size_t bufflen)
 
 
 
+static int parse_frame(char *buff, size_t len, uint8_t idx)
+{
+    Colors colors(len, Color(COLOR_NRM));
+
+    int result = 0;
+
+    printf("handle idx %hhu\n", idx);
+
+    if(len > sizeof(ether_header))
+    {
+        struct ether_header * eth = (struct ether_header *) buff;
+
+        const uint16_t ether_type = htons(eth->ether_type);
+
+        // sanity check for eth arp eth/ipv4
+        if((len == sizeof(struct ether_header) + sizeof(struct arphdr) + (2 * (ETH_ALEN + 4))) && 
+           (ether_type == ETHERTYPE_ARP))
+        {
+            struct arphdr * arp = (struct arphdr*) (eth + 1);
+ 
+            colors[12].c_ = COLOR_YEL;
+            colors[13].c_ = COLOR_YEL;
+      
+            print_hex(buff, len, colors);
+
+            if((ntohs(arp->ar_op)  == ARPOP_REQUEST) &&
+               (ntohs(arp->ar_hrd) == ARPHRD_ETHER)  &&
+               (ntohs(arp->ar_pro) == ETHERTYPE_IP)  &&
+               (arp->ar_hln        == ETH_ALEN)      &&
+               (arp->ar_pln        == 4))
+            {
+                struct arp_ipv4_req_ {
+                    struct ether_addr src_hw;
+                    in_addr           src_ip;
+
+                    struct ether_addr tar_hw;
+                    in_addr           tar_ip;
+                } __attribute__((packed)) * arp_req = (struct arp_ipv4_req_ *) (arp + 1);
+
+#ifdef DEBUG
+                printf(COLOR_YEL "in  ETH ARP:");
+                printf("t_hw [%s]",   ether_ntoa(&arp_req->tar_hw));
+                printf(", s_hw [%s]", ether_ntoa(&arp_req->src_hw));
+
+                printf(", s_ip [%s]", inet_ntoa(arp_req->src_ip));
+                printf(", t_ip [%s]", inet_ntoa(arp_req->tar_ip));
+                printf("\n" COLOR_NRM);
+#endif
+
+                // swap src/target ip addrs
+                const in_addr tmp_ip = arp_req->tar_ip;
+                arp_req->tar_ip = arp_req->src_ip;
+                arp_req->src_ip = tmp_ip;
+
+                // swap src/target hw addrs
+                memcpy(&arp_req->tar_hw, &arp_req->src_hw,  ETH_ALEN);
+                memcpy(&arp_req->src_hw, ether_aton(nbrHW), ETH_ALEN); // faux nbr
+            
+                // set as reply   
+                arp->ar_op = htons(ARPOP_REPLY);
+
+#ifdef DEBUG
+                printf(COLOR_YEL "out ETH ARP:");
+                printf("t_hw [%s]",   ether_ntoa(&arp_req->tar_hw));
+                printf(", s_hw [%s]", ether_ntoa(&arp_req->src_hw));
+
+                printf(", s_ip [%s]", inet_ntoa(arp_req->src_ip));
+                printf(", t_ip [%s]", inet_ntoa(arp_req->tar_ip));
+                printf("\n" COLOR_NRM);
+#endif
+
+                // return complete arp reply
+                result = len;
+            }
+        }
+        // sanity check for eth/ipv4
+        else if((len > sizeof(struct iphdr)) && (ether_type == ETHERTYPE_IP))
+        {
+            struct iphdr * ip = (struct iphdr*) (eth + 1);
+
+            // set ip colors
+            colors[14].c_ = COLOR_GRN;
+            colors[23].c_ = COLOR_GRN;
+
+            print_hex(buff, len, colors);
+ 
+            if(csum16(ip, ip->ihl << 2) == 0xffff)
+             {
+                switch(ip->protocol)
+                 {
+                    case IPPROTO_ICMP:
+                     {
+                       struct icmphdr * icmp = (struct icmphdr *)(buff + sizeof(ether_header) + (ip->ihl << 2));
+
+                       const size_t icmplen = ntohs(ip->tot_len) - (ip->ihl << 2);
+
+                       if(csum16(icmp, icmplen) == 0xffff)
+                        {
+                           if(icmp->type == ICMP_ECHO)
+                             {
+
+#ifdef DEBUG
+                               if(icmplen >= (sizeof(icmphdr) + sizeof(struct timeval)))
+                                 {
+                                   // see man ping
+                                   struct ts_ {
+                                     struct timeval tv;
+                                   } __attribute__((packed))* ts = (struct ts_*) (icmp + 1);
+                                   printf("ETH IPv4 ICMP ECHO_REQ seq %hu, ts %ld:%06ld\n", 
+                                          ntohs(icmp->un.echo.sequence),
+                                          htole64(ts->tv.tv_sec), htole64(ts->tv.tv_usec));
+                                 }
+#endif
+
+                               // turn into echo reply
+                               icmp->type = ICMP_ECHOREPLY;
+
+                               // icmp checksum
+                               icmp->checksum = 0;
+                               icmp->checksum = ~csum16(icmp, icmplen);
+
+                               // swap ip srd/dst
+                               const in_addr_t tmp_ip = ip->saddr;
+                               ip->saddr = ip->daddr;
+                               ip->daddr = tmp_ip;
+ 
+                               // ip checksum
+                               ip->check = 0;
+                               ip->check = ~csum16(ip, ip->ihl << 2);
+
+                               result = len;
+                            }
+                        }
+                       else
+                        {
+                           printf(COLOR_RED "ETH IPv4 ICMP: bad chksum\n" COLOR_NRM);
+                        }
+                     }
+                    break;
+
+
+                    case IPPROTO_UDP:
+
+                     // XXX TODO check for rip request
+                    break;
+                 }
+             }
+            else
+             {
+               printf(COLOR_RED "ETH IPv4: bad chksum\n" COLOR_NRM);
+             }
+        }
+
+      // something to send back
+      if(result > 0)
+       {
+         // swap eth src/dst
+         memcpy(&eth->ether_dhost, &eth->ether_shost, ETH_ALEN);
+         memcpy(&eth->ether_shost, ether_aton(nbrHW), ETH_ALEN); // faux nbr
+       }
+
+    }
+
+   return result;
+}
+
+
+
+static void sig_handle(int sig)
+{
+  if(sig == SIGINT || sig == SIGTERM)
+    {
+      printf("caught term signal\n");
+
+      bRunning = false;
+    }
+}
+
+
 int main(int, char *[])
 {
-    // create tun tap object
-    TunTap tunTap;
+    signal(SIGINT,  sig_handle);
+    signal(SIGTERM, sig_handle);
 
-    // open
-    if(tunTap.open("/dev/net/tun", "tuntap0", IFF_TAP | IFF_NO_PI) < 0)
-     {
-        bye("tun open");
-     }
+    const size_t NUM_TUN_TAP = 2;
 
-    // set ip addr
-    if(tunTap.set_ip_address(inet_addr(localIP), 24) < 0)
-     {
-        bye("tun set ip");
-     }
+    TunTap tunTap[NUM_TUN_TAP];
 
-    // set hw addr
-    if(tunTap.set_hw_address(ether_aton(localHW)) < 0)
-     {
-        bye("tun set ip");
-     }
+    int fd_max = -1;
 
-    // set up, arp on
-    if(tunTap.activate(true, true) < 0)
-     {
-        bye("tun activate");
-     }
+    fd_set read_fds;
 
-    // set non blocking
-    if(tunTap.set_blocking(false) < 0)
+    FD_ZERO(&read_fds);
+
+    for(uint8_t idx = 0; idx < NUM_TUN_TAP; ++idx)
      {
-        bye("tun setblocking");
+       const uint8_t tunId = idx + 1;
+
+       char str[64];
+
+       // open device
+       if(tunTap[idx].open("/dev/net/tun", 
+            fmt_str("tuntap%hhu", str, sizeof(str), tunId), 
+              IFF_TAP | IFF_NO_PI) < 0)
+        {
+           bye("tun open");
+        }
+
+       // set ip addr
+       if(tunTap[idx].set_ip_address(inet_addr(
+             fmt_str("172.16.%hhu.1", str, sizeof(str), tunId)), 16) < 0)
+        {
+           bye("tun set ip");
+        }
+
+       // set hw addr
+       if(tunTap[idx].set_hw_address(ether_aton(
+             fmt_str("02:02:00:00:%02hhx:01", str, sizeof(str), tunId))) < 0)
+        {
+           bye("tun set ip");
+        }
+
+       // set up, arp on
+       if(tunTap[idx].activate(true, true) < 0)
+        {
+           bye("tun activate");
+        }
+
+       // set blocking
+       if(tunTap[idx].set_blocking(true) < 0)
+        {
+           bye("tun setblocking");
+        }
+
+       const int fd = tunTap[idx].get_handle();
+
+       // add to read fd set
+       FD_SET(fd, &read_fds);
+
+       // get max fd
+       fd_max = std::max(fd_max, fd);
      }
 
     while(bRunning)
      {
        char buff[2048] = {0};
 
-       const int num_read = tunTap.read(buff, sizeof(buff));
+       fd_set rfds = read_fds;
+       
+       int num_ready = select(fd_max + 1, &rfds, nullptr, nullptr, nullptr);
 
-       if(num_read > 0) 
-         {
-           const int num_write = parse_frame(buff, num_read);
-
-           if(num_write > 0)
-            {
-              tunTap.write(buff, num_write);
-            }
-         }
-       else
-         {
-           const size_t num_write = build_rip(buff, sizeof(buff));
-           
-           if(num_write > 0)
+       while(num_ready > 0 && bRunning)
+        {
+          for(uint8_t idx = 0; idx < NUM_TUN_TAP; ++idx)
            {
-             tunTap.write(buff, num_write);
-           }
+              const int fd = tunTap[idx].get_handle();
 
-          sleep(1);
+              if(FD_ISSET(fd, &rfds))
+               {
+                 const int num_read = tunTap[idx].read(buff, sizeof(buff));
+
+                 if(num_read > 0) 
+                  {
+                     const int num_write = parse_frame(buff, num_read, idx);
+
+                     if(num_write > 0)
+                      {
+                        tunTap[0].write(buff, num_write);
+                      }
+                  }
+                 else
+                  {
+                    perror("tuntap.read");
+                  }
+
+                  --num_ready;
+                  FD_CLR(fd, &rfds);
+               }
+           }  
         }
     }
 
