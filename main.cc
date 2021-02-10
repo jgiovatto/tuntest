@@ -73,8 +73,26 @@ const char * rmtNWfmt = "255.255.255.0";
  *  | 10.10.1.0/24 --- 172.16.1.99            172.16.1.1/24       172.16.2.1/24                 172.16.2.99  --- 10.10.2.0/24
  *  |                  02:02:00:00:01:63 ---  02:02:00:00:01:01   02:02:00:00:02:01  ---  02:02:00:00:02:63
  *                               
+ * tuntap1: flags=4163<UP,BROADCAST,RUNNING,MULTICAST>  mtu 1500
+ *       inet 172.16.1.1  netmask 255.255.255.0  broadcast 172.16.1.255
+ *       inet6 fe80::2:ff:fe00:101  prefixlen 64  scopeid 0x20<link>
+ *       ether 02:02:00:00:01:01  txqueuelen 1000  (Ethernet)
+ *       RX packets 0  bytes 0 (0.0 B)
+ *       RX errors 0  dropped 0  overruns 0  frame 0
+ *       TX packets 38  bytes 5304 (5.1 KiB)
+ *       TX errors 0  dropped 0 overruns 0  carrier 0  collisions 0
  *
- * Kernel IP routing table
+ * tuntap2: flags=4163<UP,BROADCAST,RUNNING,MULTICAST>  mtu 1500
+ *        inet 172.16.2.1  netmask 255.255.255.0  broadcast 172.16.2.255
+ *        inet6 fe80::2:ff:fe00:201  prefixlen 64  scopeid 0x20<link>
+ *        ether 02:02:00:00:02:01  txqueuelen 1000  (Ethernet)
+ *        RX packets 0  bytes 0 (0.0 B)
+ *        RX errors 0  dropped 0  overruns 0  frame 0
+ *        TX packets 38  bytes 5304 (5.1 KiB)
+ *        TX errors 0  dropped 0 overruns 0  carrier 0  collisions 0
+ *
+ *
+ * Kernel IP routing table after running zebra/rip
  * Destination     Gateway         Genmask         Flags Metric Ref    Use Iface
  * 10.10.1.0       172.16.1.99     255.255.255.0   UG    20     0        0 tuntap1
  * 10.10.2.0       172.16.2.99     255.255.255.0   UG    20     0        0 tuntap2
