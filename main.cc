@@ -38,19 +38,28 @@
 #define COLOR_RED "\033[0;31m"
 #define COLOR_YEL "\033[1;33m"
 
+char str1[64];
+
 // ripv2 addrs
-const char *   ripIP   = "224.0.0.9";
-const char *   ripHW   = "01:00:5e:00:00:09";
-const uint16_t ripPort = 520;
-const char *   anyIP   = "0.0.0.0";
+const char *   ripIPstr   = "224.0.0.9";
+const char *   ripHWstr   = "01:00:5e:00:00:09";
+const uint16_t ripPortstr = 520;
+const char *   anyIPstr   = "0.0.0.0";
 
-// faux nbr addrs 
-const char * nbrIP = "172.16.0.99";
-const char * nbrHW = "02:02:00:00:00:63";
+// tuntap name fmt
+const char * tunTapfmt = "tuntap%hhu";
 
-// faux nbr lan
-const char * rmtIP = "172.16.99.0";
-const char * rmtNW = "255.255.255.0";
+// local addr fmt
+const char * localHWfmt = "02:02:00:00:%02hhx:01";
+const char * localIPfmt = "172.16.%hhu.1";
+
+// faux nbr (99) addr fmt
+const char * fauxHWfmt = "02:02:00:00:%02hhx:63";
+const char * fauxIPfmt = "172.16.%hhu.99";
+
+// faux nbr attached lan
+const char * rmtIPfmt = "192.168.%hhu.0";
+const char * rmtNWfmt = "255.255.255.0";
 
 
 /*
@@ -183,21 +192,13 @@ static uint16_t csum16v(const struct iovec * iov, const size_t iovn)
 
 
 
-/*
- * IP (tos 0x0, ttl 1, id 0, offset 0, flags [none], proto UDP (17), length 52)
- *   172.16.0.99.520 > 224.0.0.9.520: [udp sum ok] 
- *	RIPv2, Request, length: 24, routes: 1 or less
- *	  AFI IPv4,     172.16.1.99/24, tag 0x0000, metric: 1, next-hop: self
- *	0x0000:  0102 0000 0002 0000 ac10 0163 ffff ff00
- *	0x0010:  0000 0000 0000 0001
- */
-static size_t build_rip(char * buff, size_t bufflen)
+static size_t build_rip(char * buff, size_t bufflen, uint8_t id)
 {
    Colors colors(bufflen, Color(COLOR_NRM));
 
    memset(buff, 0x0, bufflen);
 
-   static uint8_t id = 0;
+   static uint8_t cnt = 0;
 
    auto eth = (struct ether_header *)  buff;
    auto ip  = (struct iphdr *)        (buff + 14);
@@ -210,10 +211,10 @@ static size_t build_rip(char * buff, size_t bufflen)
      rip_entry_t() :
       family(htons(2)),
       tag(0),
-      addr(id == 0 ? inet_addr(anyIP) : inet_addr(rmtIP)), // faux rmt network
-      mask(id == 0 ? inet_addr(anyIP) : inet_addr(rmtNW)), // faux rmt netmask
-      next(inet_addr(anyIP)),                              // implies self
-      metric(htonl(id == 0 ? 16: 1))
+      addr(cnt == 0 ? inet_addr(anyIPstr) : inet_addr(rmtIPfmt)), // faux rmt network
+      mask(cnt == 0 ? inet_addr(anyIPstr) : inet_addr(rmtNWfmt)), // faux rmt netmask
+      next(inet_addr(anyIPstr)),                                  // implies self
+      metric(htonl(cnt == 0 ? 16: 1))
       { }
     }__attribute__((packed));
 
@@ -223,7 +224,7 @@ static size_t build_rip(char * buff, size_t bufflen)
      rip_entry_t entry[1];
 
      riphdr() : 
-      command(id == 0 ? 1 : 2),
+      command(cnt == 0 ? 1 : 2),
       version(2),
       mbz(0)
      { }
@@ -231,15 +232,15 @@ static size_t build_rip(char * buff, size_t bufflen)
 
    memcpy(buff + 42, &rip, sizeof(rip));
 
-   // bump rip id
-   ++id;
+   // bump rip cnt
+   ++cnt;
  
    // udp header and data len
    const uint16_t udplen = sizeof(*udp) + sizeof(rip);
 
    // set eth hdr
-   memcpy(&eth->ether_dhost, ether_aton(ripHW), ETH_ALEN); // ripv2
-   memcpy(&eth->ether_shost, ether_aton(nbrHW), ETH_ALEN); // faux nbr
+   memcpy(&eth->ether_dhost, ether_aton(ripHWstr), ETH_ALEN); // ripv2
+   memcpy(&eth->ether_shost, ether_aton(fmt_str(fauxHWfmt, str1, sizeof(str1), id)), ETH_ALEN); // faux nbr
    eth->ether_type = htons(ETHERTYPE_IP);
 
    colors[12].c_ = COLOR_YEL;
@@ -255,8 +256,8 @@ static size_t build_rip(char * buff, size_t bufflen)
    ip->ttl      = 1;
    ip->protocol = IPPROTO_UDP;
    ip->check    = htons(0);
-   ip->saddr    = inet_addr(nbrIP);  // faux nbr
-   ip->daddr    = inet_addr(ripIP);     // ripv2
+   ip->saddr    = inet_addr(fmt_str(fauxIPfmt, str1, sizeof(str1), id));  // faux nbr ip
+   ip->daddr    = inet_addr(ripIPstr);                                    // ripv2
    // ip csum
    ip->check = ~csum16(ip, ip->ihl << 2);
 
@@ -264,8 +265,8 @@ static size_t build_rip(char * buff, size_t bufflen)
    colors[23].c_ = COLOR_GRN;
  
    // set udp hdr
-   udp->source = htons(ripPort); // rip port
-   udp->dest   = htons(ripPort); // rip port
+   udp->source = htons(ripPortstr); // rip port
+   udp->dest   = htons(ripPortstr); // rip port
    udp->len    = htons(udplen);
    udp->check  = 0;
 
@@ -296,13 +297,13 @@ static size_t build_rip(char * buff, size_t bufflen)
 
 
 
-static int parse_frame(char *buff, size_t len, uint8_t idx)
+static int parse_frame(char *buff, size_t len, uint8_t tunId)
 {
     Colors colors(len, Color(COLOR_NRM));
 
-    int result = 0;
+    printf("%s tunId %hhu\n", __func__, tunId);
 
-    printf("handle idx %hhu\n", idx);
+    int result = 0;
 
     if(len > sizeof(ether_header))
     {
@@ -334,7 +335,6 @@ static int parse_frame(char *buff, size_t len, uint8_t idx)
                     struct ether_addr tar_hw;
                     in_addr           tar_ip;
                 } __attribute__((packed)) * arp_req = (struct arp_ipv4_req_ *) (arp + 1);
-
 #ifdef DEBUG
                 printf(COLOR_YEL "in  ETH ARP:");
                 printf("t_hw [%s]",   ether_ntoa(&arp_req->tar_hw));
@@ -352,7 +352,7 @@ static int parse_frame(char *buff, size_t len, uint8_t idx)
 
                 // swap src/target hw addrs
                 memcpy(&arp_req->tar_hw, &arp_req->src_hw,  ETH_ALEN);
-                memcpy(&arp_req->src_hw, ether_aton(nbrHW), ETH_ALEN); // faux nbr
+                memcpy(&arp_req->src_hw, ether_aton(fmt_str(fauxHWfmt, str1, sizeof(str1), tunId)), ETH_ALEN); // faux nbr
             
                 // set as reply   
                 arp->ar_op = htons(ARPOP_REPLY);
@@ -436,7 +436,6 @@ static int parse_frame(char *buff, size_t len, uint8_t idx)
                      }
                     break;
 
-
                     case IPPROTO_UDP:
 
                      // XXX TODO check for rip request
@@ -454,7 +453,7 @@ static int parse_frame(char *buff, size_t len, uint8_t idx)
        {
          // swap eth src/dst
          memcpy(&eth->ether_dhost, &eth->ether_shost, ETH_ALEN);
-         memcpy(&eth->ether_shost, ether_aton(nbrHW), ETH_ALEN); // faux nbr
+         memcpy(&eth->ether_shost, ether_aton(fmt_str(fauxHWfmt, str1, sizeof(str1), tunId)), ETH_ALEN); // faux nbr
        }
 
     }
@@ -494,11 +493,9 @@ int main(int, char *[])
      {
        const uint8_t tunId = idx + 1;
 
-       char str[64];
-
        // open device
        if(tunTap[idx].open("/dev/net/tun", 
-            fmt_str("tuntap%hhu", str, sizeof(str), tunId), 
+            fmt_str(tunTapfmt, str1, sizeof(str1), tunId), 
               IFF_TAP | IFF_NO_PI) < 0)
         {
            bye("tun open");
@@ -506,14 +503,14 @@ int main(int, char *[])
 
        // set ip addr
        if(tunTap[idx].set_ip_address(inet_addr(
-             fmt_str("172.16.%hhu.1", str, sizeof(str), tunId)), 16) < 0)
+             fmt_str(localIPfmt, str1, sizeof(str1), tunId)), 24) < 0)
         {
            bye("tun set ip");
         }
 
        // set hw addr
        if(tunTap[idx].set_hw_address(ether_aton(
-             fmt_str("02:02:00:00:%02hhx:01", str, sizeof(str), tunId))) < 0)
+             fmt_str(localHWfmt, str1, sizeof(str1), tunId))) < 0)
         {
            bye("tun set ip");
         }
@@ -559,11 +556,11 @@ int main(int, char *[])
 
                  if(num_read > 0) 
                   {
-                     const int num_write = parse_frame(buff, num_read, idx);
+                     const int num_write = parse_frame(buff, num_read, idx + 1);
 
                      if(num_write > 0)
                       {
-                        tunTap[0].write(buff, num_write);
+                        tunTap[idx].write(buff, num_write);
                       }
                   }
                  else
