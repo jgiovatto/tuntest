@@ -1,9 +1,11 @@
 // jgiovatto@adjacentlink.com
 // Jan 29, 2021
 // tuntest tool to play with ip/arp frames
-//
-// may need to pop open the new interface
-// sudo iptables -I INPUT -i tuntap0 -j ACCEPT
+
+
+// may need to pop open the new interface so rip can recv our msgs
+// sudo iptables -I INPUT -i tuntap1 -j ACCEPT
+// sudo iptables -I INPUT -i tuntap2 -j ACCEPT
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -28,8 +30,7 @@
 #include <net/if_arp.h>
 
 #include "tuntap.h"
-
-#include <vector>
+#include "types.h"
 
 #define COLOR_NRM "\033[0m"
 #define COLOR_BLE "\033[0;34m"
@@ -38,13 +39,14 @@
 #define COLOR_RED "\033[0;31m"
 #define COLOR_YEL "\033[1;33m"
 
+// string fmt helper
 char str1[64];
+char str2[64];
 
 // ripv2 addrs
 const char *   ripIPstr   = "224.0.0.9";
 const char *   ripHWstr   = "01:00:5e:00:00:09";
-const uint16_t ripPortstr = 520;
-const char *   anyIPstr   = "0.0.0.0";
+const uint16_t ripPortNum = 520;
 
 // tuntap name fmt
 const char * tunTapfmt = "tuntap%hhu";
@@ -57,8 +59,8 @@ const char * localIPfmt = "172.16.%hhu.1";
 const char * fauxHWfmt = "02:02:00:00:%02hhx:63";
 const char * fauxIPfmt = "172.16.%hhu.99";
 
-// faux nbr attached lan
-const char * rmtIPfmt = "192.168.%hhu.0";
+// faux nbr attached lan fmt
+const char * rmtIPfmt = "10.10.%hhu.0";
 const char * rmtNWfmt = "255.255.255.0";
 
 
@@ -66,28 +68,23 @@ const char * rmtNWfmt = "255.255.255.0";
  *   this demo gives the illusion of the following topology
  *
  *
- *  |------- local IP stack -------|               |---------  faux nbr IP stack ------------|
- *  |                              |               |                                         |
- *  | eth0       tuntap1           |               |     eth0                     eth1       |
- *  |            172.16.1.1        |               |  172.16.0.99             172.16.99.0/24 |
- *  |            02:02:00:00:00:01 |               |  02:02:00:00:00:63                      |
- *                   |                                     |
- *                   |                                     |
- *                   |------------172.16.0.0/24----------- | 
+ *  |                                        | ------     local IP stack   -----  |  
+ *  |             faux1                          tuntap1            tuntap2                   faux2
+ *  | 10.10.1.0/24 --- 172.16.1.99            172.16.1.1/24       172.16.2.1/24                 172.16.2.99  --- 10.10.2.0/24
+ *  |                  02:02:00:00:01:63 ---  02:02:00:00:01:01   02:02:00:00:01:01  ---  02:02:00:00:02:63
+ *                               
+ *
+ * Kernel IP routing table
+ * Destination     Gateway         Genmask         Flags Metric Ref    Use Iface
+ * 10.10.1.0       172.16.1.99     255.255.255.0   UG    20     0        0 tuntap1
+ * 10.10.2.0       172.16.2.99     255.255.255.0   UG    20     0        0 tuntap2
+ * 172.16.1.0      0.0.0.0         255.255.255.0   U     0      0        0 tuntap1
+ * 172.16.2.0      0.0.0.0         255.255.255.0   U     0      0        0 tuntap2
  */
 
 
-// add some color to our logs
-struct Color {
-  Color(const char * c) : c_(c) { }
-  const char * c_;
-};
-
-using Colors = std::vector<Color>;
-
 
 volatile bool bRunning = true;
-
 
 static void bye(const char *msg)
 {
@@ -96,7 +93,10 @@ static void bye(const char *msg)
 }
 
 
-static const char * fmt_str(const char * fmt, char * const str, const size_t strlen, const uint8_t val)
+static const char * fmt_str(const char * fmt, 
+                            char * const str, 
+                            const size_t strlen, 
+                            const uint8_t val)
 {
     memset(str, 0x0, strlen);
 
@@ -192,57 +192,49 @@ static uint16_t csum16v(const struct iovec * iov, const size_t iovn)
 
 
 
-static size_t build_rip(char * buff, size_t bufflen, uint8_t id)
+static size_t build_rip(char * buff, size_t bufflen, uint8_t tunId)
 {
+   static uint8_t ripcnt = 0;
+
    Colors colors(bufflen, Color(COLOR_NRM));
 
    memset(buff, 0x0, bufflen);
 
-   static uint8_t cnt = 0;
+   auto eth = (struct ether_header *)  buff;       // offset 0
+   auto ip  = (struct iphdr *)        (buff + 14); // offset 14
+   auto udp = (struct udphdr *)       (buff + 34); // offset 34
 
-   auto eth = (struct ether_header *)  buff;
-   auto ip  = (struct iphdr *)        (buff + 14);
-   auto udp = (struct udphdr *)       (buff + 34);
+   uint16_t udplen = sizeof(*udp);
 
-   struct rip_entry_t {
-     uint16_t family, tag;
-     uint32_t addr, mask, next, metric;
-  
-     rip_entry_t() :
-      family(htons(2)),
-      tag(0),
-      addr(cnt == 0 ? inet_addr(anyIPstr) : inet_addr(rmtIPfmt)), // faux rmt network
-      mask(cnt == 0 ? inet_addr(anyIPstr) : inet_addr(rmtNWfmt)), // faux rmt netmask
-      next(inet_addr(anyIPstr)),                                  // implies self
-      metric(htonl(cnt == 0 ? 16: 1))
-      { }
-    }__attribute__((packed));
+   // first msg is rip request
+   if(ripcnt++ == 0)
+    {
+      ripreqmsg_t ripmsg;
 
-   struct riphdr {
-     uint8_t     command, version;
-     uint16_t    mbz;
-     rip_entry_t entry[1];
+      udplen += sizeof(ripmsg);
 
-     riphdr() : 
-      command(cnt == 0 ? 1 : 2),
-      version(2),
-      mbz(0)
-     { }
-   } __attribute__((packed)) rip;
+      // copy rip into buff offset 42
+      memcpy(buff + 42, &ripmsg, sizeof(ripmsg));
+    }
+   else
+    {
+      // rip response
+      riprespmsg_t ripmsg(fmt_str(rmtIPfmt, str1, sizeof(str1), tunId),
+                          fmt_str(rmtNWfmt, str2, sizeof(str2), tunId),
+                          1);
 
-   memcpy(buff + 42, &rip, sizeof(rip));
+      udplen += sizeof(ripmsg);
 
-   // bump rip cnt
-   ++cnt;
- 
-   // udp header and data len
-   const uint16_t udplen = sizeof(*udp) + sizeof(rip);
+      // copy rip into buff offset 42
+      memcpy(buff + 42, &ripmsg, sizeof(ripmsg));
+    }
 
    // set eth hdr
-   memcpy(&eth->ether_dhost, ether_aton(ripHWstr), ETH_ALEN); // ripv2
-   memcpy(&eth->ether_shost, ether_aton(fmt_str(fauxHWfmt, str1, sizeof(str1), id)), ETH_ALEN); // faux nbr
+   memcpy(&eth->ether_dhost, ether_aton(ripHWstr), ETH_ALEN);                                      // ripv2
+   memcpy(&eth->ether_shost, ether_aton(fmt_str(fauxHWfmt, str1, sizeof(str1), tunId)), ETH_ALEN); // faux nbr
    eth->ether_type = htons(ETHERTYPE_IP);
 
+   // color eth porto
    colors[12].c_ = COLOR_YEL;
    colors[13].c_ = COLOR_YEL;
 
@@ -256,17 +248,18 @@ static size_t build_rip(char * buff, size_t bufflen, uint8_t id)
    ip->ttl      = 1;
    ip->protocol = IPPROTO_UDP;
    ip->check    = htons(0);
-   ip->saddr    = inet_addr(fmt_str(fauxIPfmt, str1, sizeof(str1), id));  // faux nbr ip
-   ip->daddr    = inet_addr(ripIPstr);                                    // ripv2
+   ip->saddr    = inet_addr(fmt_str(fauxIPfmt, str1, sizeof(str1), tunId));  // faux nbr ip
+   ip->daddr    = inet_addr(ripIPstr);                                       // ripv2
    // ip csum
    ip->check = ~csum16(ip, ip->ihl << 2);
 
+   // ip type and proto
    colors[14].c_ = COLOR_GRN;
    colors[23].c_ = COLOR_GRN;
  
    // set udp hdr
-   udp->source = htons(ripPortstr); // rip port
-   udp->dest   = htons(ripPortstr); // rip port
+   udp->source = htons(ripPortNum); // rip port
+   udp->dest   = htons(ripPortNum); // rip port
    udp->len    = htons(udplen);
    udp->check  = 0;
 
@@ -281,14 +274,13 @@ static size_t build_rip(char * buff, size_t bufflen, uint8_t id)
                                      ip->protocol,
                                      htons(udplen)};
 
-   const struct iovec chkv[3] = {{(void*)&psum, sizeof(psum)}, 
-                                 {(void*)udp,   sizeof(*udp)},
-                                 {(void*)&rip,  sizeof(rip)}};
+   const struct iovec chkv[2] = {{(void*)&psum,  sizeof(psum)}, 
+                                 {(void*)udp,    udplen}};
 
    // udp csum
-   udp->check = ~csum16v(chkv, 3);
+   udp->check = ~csum16v(chkv, 2);
 
-   const size_t result = sizeof(*eth) + sizeof(*ip) + sizeof(*udp) + sizeof(rip);
+   const size_t result = sizeof(*eth) + sizeof(*ip) + udplen;
 
    print_hex(buff, result, colors);
 
@@ -297,30 +289,30 @@ static size_t build_rip(char * buff, size_t bufflen, uint8_t id)
 
 
 
-static int parse_frame(char *buff, size_t len, uint8_t tunId)
+static int parse_frame(char *buff, size_t bufflen, size_t msglen, uint8_t tunId)
 {
-    Colors colors(len, Color(COLOR_NRM));
+    Colors colors(msglen, Color(COLOR_NRM));
 
     printf("%s tunId %hhu\n", __func__, tunId);
 
-    int result = 0;
+    int bounce = 0;
 
-    if(len > sizeof(ether_header))
+    if(msglen > sizeof(ether_header))
     {
         struct ether_header * eth = (struct ether_header *) buff;
 
         const uint16_t ether_type = htons(eth->ether_type);
 
-        // sanity check for eth arp eth/ipv4
-        if((len == sizeof(struct ether_header) + sizeof(struct arphdr) + (2 * (ETH_ALEN + 4))) && 
-           (ether_type == ETHERTYPE_ARP))
+        // sanity check ethhdr + arphdr + 2(eth/ipv4) and ether_type_arp
+        if((msglen == sizeof(struct ether_header) + sizeof(struct arphdr) + (20)) && (ether_type == ETHERTYPE_ARP))
         {
             struct arphdr * arp = (struct arphdr*) (eth + 1);
- 
+
+            // color eth proto 
             colors[12].c_ = COLOR_YEL;
             colors[13].c_ = COLOR_YEL;
       
-            print_hex(buff, len, colors);
+            print_hex(buff, msglen, colors);
 
             if((ntohs(arp->ar_op)  == ARPOP_REQUEST) &&
                (ntohs(arp->ar_hrd) == ARPHRD_ETHER)  &&
@@ -344,7 +336,6 @@ static int parse_frame(char *buff, size_t len, uint8_t tunId)
                 printf(", t_ip [%s]", inet_ntoa(arp_req->tar_ip));
                 printf("\n" COLOR_NRM);
 #endif
-
                 // swap src/target ip addrs
                 const in_addr tmp_ip = arp_req->tar_ip;
                 arp_req->tar_ip = arp_req->src_ip;
@@ -366,37 +357,38 @@ static int parse_frame(char *buff, size_t len, uint8_t tunId)
                 printf(", t_ip [%s]", inet_ntoa(arp_req->tar_ip));
                 printf("\n" COLOR_NRM);
 #endif
-
                 // return complete arp reply
-                result = len;
+                bounce = msglen;
             }
         }
         // sanity check for eth/ipv4
-        else if((len > sizeof(struct iphdr)) && (ether_type == ETHERTYPE_IP))
+        else if((msglen > sizeof(struct iphdr)) && (ether_type == ETHERTYPE_IP))
         {
             struct iphdr * ip = (struct iphdr*) (eth + 1);
 
-            // set ip colors
+            const size_t iphl = ip->ihl << 2;       // iphdr len may vary
+            const size_t iptl = ntohs(ip->tot_len);
+
+            // ip type and proto
             colors[14].c_ = COLOR_GRN;
             colors[23].c_ = COLOR_GRN;
 
-            print_hex(buff, len, colors);
+            print_hex(buff, msglen, colors);
  
-            if(csum16(ip, ip->ihl << 2) == 0xffff)
+            if(csum16(ip, iphl) == 0xffff)
              {
                 switch(ip->protocol)
                  {
                     case IPPROTO_ICMP:
                      {
-                       struct icmphdr * icmp = (struct icmphdr *)(buff + sizeof(ether_header) + (ip->ihl << 2));
+                       struct icmphdr * icmp = (struct icmphdr *) (buff + sizeof(ether_header) + iphl);
 
-                       const size_t icmplen = ntohs(ip->tot_len) - (ip->ihl << 2);
+                       const size_t icmplen = iptl - iphl;
 
                        if(csum16(icmp, icmplen) == 0xffff)
                         {
                            if(icmp->type == ICMP_ECHO)
                              {
-
 #ifdef DEBUG
                                if(icmplen >= (sizeof(icmphdr) + sizeof(struct timeval)))
                                  {
@@ -424,9 +416,9 @@ static int parse_frame(char *buff, size_t len, uint8_t tunId)
  
                                // ip checksum
                                ip->check = 0;
-                               ip->check = ~csum16(ip, ip->ihl << 2);
+                               ip->check = ~csum16(ip, iphl);
 
-                               result = len;
+                               bounce = msglen;
                             }
                         }
                        else
@@ -437,8 +429,15 @@ static int parse_frame(char *buff, size_t len, uint8_t tunId)
                     break;
 
                     case IPPROTO_UDP:
+                     {
+                        auto udp = (struct udphdr *) (buff + sizeof(ether_header) + iphl);
 
-                     // XXX TODO check for rip request
+                        if((htons(udp->source) == ripPortNum) && 
+                           (htons(udp->dest)   == ripPortNum))
+                         {
+                           return build_rip(buff, bufflen, tunId);
+                         }
+                     }
                     break;
                  }
              }
@@ -449,16 +448,16 @@ static int parse_frame(char *buff, size_t len, uint8_t tunId)
         }
 
       // something to send back
-      if(result > 0)
+      if(bounce > 0)
        {
-         // swap eth src/dst
+         // must swap eth src/dst
          memcpy(&eth->ether_dhost, &eth->ether_shost, ETH_ALEN);
          memcpy(&eth->ether_shost, ether_aton(fmt_str(fauxHWfmt, str1, sizeof(str1), tunId)), ETH_ALEN); // faux nbr
        }
 
     }
 
-   return result;
+   return bounce;
 }
 
 
@@ -556,7 +555,7 @@ int main(int, char *[])
 
                  if(num_read > 0) 
                   {
-                     const int num_write = parse_frame(buff, num_read, idx + 1);
+                     const int num_write = parse_frame(buff, sizeof(buff), num_read, idx + 1);
 
                      if(num_write > 0)
                       {
