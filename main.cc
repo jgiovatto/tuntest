@@ -1,9 +1,26 @@
 // jgiovatto@adjacentlink.com
 // Jan 29, 2021
-// tuntest tool to play with ip/arp frames
-
-
-// may need to pop open the new interface so rip can recv our msgs
+//
+// purpose to spoof rip/icmp/arp frames for radio networks that do
+// their own neighbor discovery
+//
+// this application will proxy for a faux neighbor number 99
+// ping/arping 172.16.2.99 or 172.16.2.99
+//
+// PING 172.16.2.99 (172.16.2.99) 56(84) bytes of data.
+// 64 bytes from 172.16.2.99: icmp_seq=1 ttl=64 time=1.16 ms
+// 64 bytes from 172.16.2.99: icmp_seq=2 ttl=64 time=0.785 ms
+// 64 bytes from 172.16.2.99: icmp_seq=3 ttl=64 time=0.728 ms
+// 64 bytes from 172.16.2.99: icmp_seq=4 ttl=64 time=0.803 ms
+//
+// ARPING 172.16.2.99 from 172.16.2.1 tuntap2
+// Unicast reply from 172.16.2.99 [02:02:00:00:02:63]  1.127ms
+// Unicast reply from 172.16.2.99 [02:02:00:00:02:63]  1.243ms
+// Unicast reply from 172.16.2.99 [02:02:00:00:02:63]  1.224ms
+// Unicast reply from 172.16.2.99 [02:02:00:00:02:63]  1.273ms
+//
+//
+// may need to pop open the new interface so zebra/rip can recv our msgs
 // sudo iptables -I INPUT -i tuntap1 -j ACCEPT
 // sudo iptables -I INPUT -i tuntap2 -j ACCEPT
 
@@ -42,7 +59,7 @@
 // string fmt helper
 char str1[64];
 
-// ripv2 addrs
+// known ripv2 addrs
 const char *   ripIPstr   = "224.0.0.9";
 const char *   ripHWstr   = "01:00:5e:00:00:09";
 const uint16_t ripPortNum = 520;
@@ -58,38 +75,31 @@ const char * localIPfmt = "172.16.%hhu.1";
 const char * fauxHWfmt = "02:02:00:00:%02hhx:63";
 const char * fauxIPfmt = "172.16.%hhu.99";
 
-// faux nbr attached lan fmt
+// faux nbr attached lan segment(s) fmt
 const char * rmtNWfmt = "10.%hhu.%hhu.0";
 const char * rmtNMfmt = "255.255.255.0";
 
 
 /*
- *   this demo gives the illusion of the following topology
+ *   this demo gives the illusion of the following topology when running zebra/rip
+ *   see example config files within this project
  *
  *
- *  |                                        | ------     local IP stack   -----  |  
+ *  |                                         | ------     local IP stack   -----  |  
  *  |             faux1                          tuntap1            tuntap2                                 faux2
  *  |  10.1.N.0/24 --- 172.16.1.99            172.16.1.1/24       172.16.2.1/24                 172.16.2.99  --- 10.2.N.0/24
  *  |                  02:02:00:00:01:63 ---  02:02:00:00:01:01   02:02:00:00:02:01  ---  02:02:00:00:02:63
+ *  |                                   RIPv2                                       RIPv2
  *                               
  * tuntap1: flags=4163<UP,BROADCAST,RUNNING,MULTICAST>  mtu 1500
  *       inet 172.16.1.1  netmask 255.255.255.0  broadcast 172.16.1.255
  *       inet6 fe80::2:ff:fe00:101  prefixlen 64  scopeid 0x20<link>
  *       ether 02:02:00:00:01:01  txqueuelen 1000  (Ethernet)
- *       RX packets 0  bytes 0 (0.0 B)
- *       RX errors 0  dropped 0  overruns 0  frame 0
- *       TX packets 38  bytes 5304 (5.1 KiB)
- *       TX errors 0  dropped 0 overruns 0  carrier 0  collisions 0
  *
  * tuntap2: flags=4163<UP,BROADCAST,RUNNING,MULTICAST>  mtu 1500
  *        inet 172.16.2.1  netmask 255.255.255.0  broadcast 172.16.2.255
  *        inet6 fe80::2:ff:fe00:201  prefixlen 64  scopeid 0x20<link>
  *        ether 02:02:00:00:02:01  txqueuelen 1000  (Ethernet)
- *        RX packets 0  bytes 0 (0.0 B)
- *        RX errors 0  dropped 0  overruns 0  frame 0
- *        TX packets 38  bytes 5304 (5.1 KiB)
- *        TX errors 0  dropped 0 overruns 0  carrier 0  collisions 0
- *
  *
  * Kernel IP routing table after running zebra/rip
  * Destination     Gateway         Genmask         Flags Metric Ref    Use Iface
@@ -158,31 +168,39 @@ static void print_hex(const char * buff, size_t const bufflen, const Colors & co
           size_t pos;
           char   buf[128];
           Str() : pos(0), buf{0} { } 
-        }strHex, strTxt;
+        }strHex, strTxt; // 1 hex string and 1 text string
 
         for(size_t idx = 0; idx < lineLen; ++idx, ++pos)
         {
             if((idx != 0) && (idx % (lineLen / 2) == 0))
             {
-                strHex.pos += snprintf(strHex.buf + strHex.pos, sizeof(strHex.buf) - strHex.pos, " ");
-                strTxt.pos += snprintf(strTxt.buf + strTxt.pos, sizeof(strTxt.buf) - strTxt.pos, " ");
+                strHex.pos += snprintf(strHex.buf + strHex.pos, 
+                                       sizeof(strHex.buf) - strHex.pos, " ");
+
+                strTxt.pos += snprintf(strTxt.buf + strTxt.pos, 
+                                       sizeof(strTxt.buf) - strTxt.pos, " ");
             }
 
             if(pos < bufflen)
             {
                 const char val = buff[pos];
 
-                // as hex
-                strHex.pos += snprintf(strHex.buf + strHex.pos, sizeof(strHex.buf) - strHex.pos, "%s%02hhx ", colors[pos].c_, (uint8_t) val);
+                strHex.pos += snprintf(strHex.buf + strHex.pos, 
+                                       sizeof(strHex.buf) - strHex.pos, "%s%02hhx ", 
+                                       colors[pos].c_, (uint8_t) val);
 
-                // as txt
-                strTxt.pos += snprintf(strTxt.buf + strTxt.pos, sizeof(strTxt.buf) - strTxt.pos, "%c", isalnum(val) ? val : '.');
+                strTxt.pos += snprintf(strTxt.buf + strTxt.pos, 
+                                       sizeof(strTxt.buf) - strTxt.pos, "%c", 
+                                       isalnum(val) ? val : '.');
             }
             else
             {
-                // fill the last line
-                strHex.pos += snprintf(strHex.buf + strHex.pos, sizeof(strHex.buf) - strHex.pos, "   ");
-                strTxt.pos += snprintf(strTxt.buf + strTxt.pos, sizeof(strTxt.buf) - strTxt.pos, " ");
+                // pad the last line
+                strHex.pos += snprintf(strHex.buf + strHex.pos, 
+                                       sizeof(strHex.buf) - strHex.pos, "   ");
+
+                strTxt.pos += snprintf(strTxt.buf + strTxt.pos,
+                                       sizeof(strTxt.buf) - strTxt.pos, " ");
             }
         }
         printf("%03zu  %s    %s\n", linenum * lineLen, strTxt.buf, strHex.buf);
@@ -271,6 +289,8 @@ static size_t build_rip(char * buff, size_t bufflen, uint8_t tunId)
       udplen += sizeof(riphdr);
 
       // construct for generating N rip entries
+      // these could be 'fetched' from some neighbor manager service and
+      // populated into the rip msg here
       for(uint8_t idx = 1; idx <= 5; ++idx)
        {
           const ripentry_t ripentry {fmt_str2(rmtNWfmt, str1, sizeof(str1), tunId, idx), // net
@@ -305,7 +325,7 @@ static size_t build_rip(char * buff, size_t bufflen, uint8_t tunId)
    ip->check    = htons(0);
    ip->saddr    = inet_addr(fmt_str(fauxIPfmt, str1, sizeof(str1), tunId));  // faux nbr ip
    ip->daddr    = inet_addr(ripIPstr);                                       // ripv2
-   // ip csum
+   // set ip csum
    ip->check = ~csum16(ip, ip->ihl << 2);
 
    // ip type and proto
@@ -332,7 +352,7 @@ static size_t build_rip(char * buff, size_t bufflen, uint8_t tunId)
    const struct iovec chkv[2] = {{(void*)&psum,  sizeof(psum)}, 
                                  {(void*)udp,    udplen}};
 
-   // udp csum
+   // set udp csum
    udp->check = ~csum16v(chkv, 2);
 
    const size_t result = udp_offset + udplen;
@@ -391,30 +411,38 @@ static int parse_frame(char *buff, size_t bufflen, size_t msglen, uint8_t tunId)
                 printf(", t_ip [%s]", inet_ntoa(arp_req->tar_ip));
                 printf("\n" COLOR_NRM);
 #endif
-                // swap src/target ip addrs
-                const in_addr tmp_ip = arp_req->tar_ip;
-                arp_req->tar_ip = arp_req->src_ip;
-                arp_req->src_ip = tmp_ip;
 
-                // swap src/target hw addrs
-                memcpy(&arp_req->tar_hw, &arp_req->src_hw,  ETH_ALEN);
-                memcpy(&arp_req->src_hw, ether_aton(fmt_str(fauxHWfmt, str1, sizeof(str1), tunId)), ETH_ALEN); // faux nbr
+                // check ip target
+                const in_addr_t nbr_ip = inet_addr(fmt_str(fauxIPfmt, str1, sizeof(str1), tunId));  // faux nbr ip
+
+                // check ip dst
+                if(nbr_ip == arp_req->tar_ip.s_addr)
+                  {
+                    // swap src/target ip addrs
+                    const in_addr tmp_ip = arp_req->tar_ip;
+                    arp_req->tar_ip = arp_req->src_ip;
+                    arp_req->src_ip = tmp_ip;
+
+                    // swap src/target hw addrs
+                    memcpy(&arp_req->tar_hw, &arp_req->src_hw,  ETH_ALEN);
+                    memcpy(&arp_req->src_hw, ether_aton(fmt_str(fauxHWfmt, str1, sizeof(str1), tunId)), ETH_ALEN); // faux nbr
             
-                // set as reply   
-                arp->ar_op = htons(ARPOP_REPLY);
+                    // set as reply   
+                    arp->ar_op = htons(ARPOP_REPLY);
 
 #ifdef DEBUG
-                printf(COLOR_YEL "out ETH ARP:");
-                printf("t_hw [%s]",   ether_ntoa(&arp_req->tar_hw));
-                printf(", s_hw [%s]", ether_ntoa(&arp_req->src_hw));
+                    printf(COLOR_YEL "out ETH ARP:");
+                    printf("t_hw [%s]",   ether_ntoa(&arp_req->tar_hw));
+                    printf(", s_hw [%s]", ether_ntoa(&arp_req->src_hw));
 
-                printf(", s_ip [%s]", inet_ntoa(arp_req->src_ip));
-                printf(", t_ip [%s]", inet_ntoa(arp_req->tar_ip));
-                printf("\n" COLOR_NRM);
+                    printf(", s_ip [%s]", inet_ntoa(arp_req->src_ip));
+                    printf(", t_ip [%s]", inet_ntoa(arp_req->tar_ip));
+                    printf("\n" COLOR_NRM);
 #endif
-                // return complete arp reply
-                bounce = msglen;
-            }
+                    // return complete arp reply
+                    bounce = msglen;
+                 }
+             }
         }
         // sanity check for eth/ipv4
         else if((msglen > sizeof(struct iphdr)) && (ether_type == ETHERTYPE_IP))
@@ -446,34 +474,39 @@ static int parse_frame(char *buff, size_t bufflen, size_t msglen, uint8_t tunId)
                              {
 #ifdef DEBUG
                                if(icmplen >= (sizeof(icmphdr) + sizeof(struct timeval)))
-                                 {
-                                   // see man ping
-                                   struct ts_ {
-                                     struct timeval tv;
-                                   } __attribute__((packed))* ts = (struct ts_*) (icmp + 1);
-                                   printf("ETH IPv4 ICMP ECHO_REQ seq %hu, ts %ld:%06ld\n", 
-                                          ntohs(icmp->un.echo.sequence),
-                                          htole64(ts->tv.tv_sec), htole64(ts->tv.tv_usec));
-                                 }
+                                {
+                                  // see man ping for timestamp position
+                                  struct ts_ {
+                                    struct timeval tv;
+                                  } __attribute__((packed))* ts = (struct ts_*) (icmp + 1);
+                                  printf("ETH IPv4 ICMP ECHO_REQ seq %hu, ts %ld:%06ld\n", 
+                                         ntohs(icmp->un.echo.sequence),
+                                         htole64(ts->tv.tv_sec), htole64(ts->tv.tv_usec));
+                                }
 #endif
+                               const in_addr_t nbr_ip = inet_addr(fmt_str(fauxIPfmt, str1, sizeof(str1), tunId));  // faux nbr ip
 
-                               // turn into echo reply
-                               icmp->type = ICMP_ECHOREPLY;
+                               // again check ip dst is our faux/known nbr
+                               if(nbr_ip == ip->daddr)
+                                {
+                                  // turn into echo reply
+                                  icmp->type = ICMP_ECHOREPLY;
 
-                               // icmp checksum
-                               icmp->checksum = 0;
-                               icmp->checksum = ~csum16(icmp, icmplen);
+                                  // icmp checksum
+                                  icmp->checksum = 0;
+                                  icmp->checksum = ~csum16(icmp, icmplen);
 
-                               // swap ip srd/dst
-                               const in_addr_t tmp_ip = ip->saddr;
-                               ip->saddr = ip->daddr;
-                               ip->daddr = tmp_ip;
+                                  // swap ip srd/dst
+                                  const in_addr_t tmp_ip = ip->saddr;
+                                  ip->saddr = ip->daddr;
+                                  ip->daddr = tmp_ip;
  
-                               // ip checksum
-                               ip->check = 0;
-                               ip->check = ~csum16(ip, iphl);
+                                  // ip checksum
+                                  ip->check = 0;
+                                  ip->check = ~csum16(ip, iphl);
 
-                               bounce = msglen;
+                                  bounce = msglen;
+                               }
                             }
                         }
                        else
@@ -487,6 +520,7 @@ static int parse_frame(char *buff, size_t bufflen, size_t msglen, uint8_t tunId)
                      {
                         auto udp = (struct udphdr *) (buff + sizeof(ether_header) + iphl);
 
+                        // XXX TODO check rip header, this should do for now
                         if((htons(udp->source) == ripPortNum) && 
                            (htons(udp->dest)   == ripPortNum))
                          {
@@ -612,6 +646,7 @@ int main(int, char *[])
                   {
                      const int num_write = parse_frame(buff, sizeof(buff), num_read, idx + 1);
 
+                     // bounce something back
                      if(num_write > 0)
                       {
                         tunTap[idx].write(buff, num_write);
