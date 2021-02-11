@@ -134,7 +134,6 @@ static const char * fmt_str(const char * fmt,
                             const uint8_t val)
 {
     memset(str, 0x0, strlen);
-
     snprintf(str, strlen - 1, fmt, val);
 
     return str;
@@ -147,7 +146,6 @@ static const char * fmt_str2(const char * fmt,
                              const uint8_t val2)
 {
     memset(str, 0x0, strlen);
-
     snprintf(str, strlen - 1, fmt, val1, val2);
 
     return str;
@@ -413,6 +411,7 @@ static int parse_frame(char *buff, size_t bufflen, size_t msglen, uint8_t tunId)
 #endif
 
                 // check ip target
+                // again some neighbor manager service could be consulted to avoid sending an arp over the air
                 const in_addr_t nbr_ip = inet_addr(fmt_str(fauxIPfmt, str1, sizeof(str1), tunId));  // faux nbr ip
 
                 // check ip dst
@@ -486,7 +485,7 @@ static int parse_frame(char *buff, size_t bufflen, size_t msglen, uint8_t tunId)
 #endif
                                const in_addr_t nbr_ip = inet_addr(fmt_str(fauxIPfmt, str1, sizeof(str1), tunId));  // faux nbr ip
 
-                               // again check ip dst is our faux/known nbr
+                               // again check ip dst is our faux/known nbr, just for fun
                                if(nbr_ip == ip->daddr)
                                 {
                                   // turn into echo reply
@@ -520,10 +519,11 @@ static int parse_frame(char *buff, size_t bufflen, size_t msglen, uint8_t tunId)
                      {
                         auto udp = (struct udphdr *) (buff + sizeof(ether_header) + iphl);
 
-                        // XXX TODO check rip header, this should do for now
+                        // XXX TODO check for actual rip header, this should do for now
                         if((htons(udp->source) == ripPortNum) && 
                            (htons(udp->dest)   == ripPortNum))
                          {
+                           // forged frame all ready send it now
                            return build_rip(buff, bufflen, tunId);
                          }
                      }
@@ -626,6 +626,7 @@ int main(int, char *[])
 
     while(bRunning)
      {
+       // single threaded so one buffer for all i/o
        char buff[2048] = {0};
 
        fd_set rfds = read_fds;
