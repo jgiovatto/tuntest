@@ -29,11 +29,11 @@ const char * anyIPstr = "0.0.0.0";
  } __attribute__((packed));
 
 // rip entry 1 or more
-struct rip_entry_t {
+struct ripentry_t {
   uint16_t family_, tag_;
   uint32_t addr_, mask_, next_, metric_;
  
-  rip_entry_t(const char * addr, const char * mask, uint32_t metric, uint16_t family) :
+  ripentry_t(const char * addr, const char * mask, uint32_t metric, uint16_t family = 2) :
     family_(htons(family)),
     tag_(0),
     addr_(inet_addr(addr)),
@@ -51,19 +51,7 @@ struct rip_entry_t {
    { }
 
    riphdr_t    hdr_; 
-   rip_entry_t entry_;
- } __attribute__((packed));
-
-
- // simple rip response msg
- struct riprespmsg_t {
-   riprespmsg_t(const char * addr, const char * mask, uint32_t metric) :
-     hdr_(2),
-     entry_(addr, mask, metric, 2)
-   { }
-
-   riphdr_t    hdr_; 
-   rip_entry_t entry_;
+   ripentry_t entry_;
  } __attribute__((packed));
 
 

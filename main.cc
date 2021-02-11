@@ -41,7 +41,6 @@
 
 // string fmt helper
 char str1[64];
-char str2[64];
 
 // ripv2 addrs
 const char *   ripIPstr   = "224.0.0.9";
@@ -60,8 +59,8 @@ const char * fauxHWfmt = "02:02:00:00:%02hhx:63";
 const char * fauxIPfmt = "172.16.%hhu.99";
 
 // faux nbr attached lan fmt
-const char * rmtIPfmt = "10.10.%hhu.0";
-const char * rmtNWfmt = "255.255.255.0";
+const char * rmtNWfmt = "10.%hhu.%hhu.0";
+const char * rmtNMfmt = "255.255.255.0";
 
 
 /*
@@ -70,7 +69,7 @@ const char * rmtNWfmt = "255.255.255.0";
  *
  *  |                                        | ------     local IP stack   -----  |  
  *  |             faux1                          tuntap1            tuntap2                                 faux2
- *  | 10.10.1.0/24 --- 172.16.1.99            172.16.1.1/24       172.16.2.1/24                 172.16.2.99  --- 10.10.2.0/24
+ *  |  10.1.N.0/24 --- 172.16.1.99            172.16.1.1/24       172.16.2.1/24                 172.16.2.99  --- 10.2.N.0/24
  *  |                  02:02:00:00:01:63 ---  02:02:00:00:01:01   02:02:00:00:02:01  ---  02:02:00:00:02:63
  *                               
  * tuntap1: flags=4163<UP,BROADCAST,RUNNING,MULTICAST>  mtu 1500
@@ -94,10 +93,18 @@ const char * rmtNWfmt = "255.255.255.0";
  *
  * Kernel IP routing table after running zebra/rip
  * Destination     Gateway         Genmask         Flags Metric Ref    Use Iface
- * 10.10.1.0       172.16.1.99     255.255.255.0   UG    20     0        0 tuntap1
- * 10.10.2.0       172.16.2.99     255.255.255.0   UG    20     0        0 tuntap2
- * 172.16.1.0      0.0.0.0         255.255.255.0   U     0      0        0 tuntap1
- * 172.16.2.0      0.0.0.0         255.255.255.0   U     0      0        0 tuntap2
+ * 10.1.1.0        172.16.1.99     255.255.255.0   UG    20     0        0 tuntap1
+ * 10.1.2.0        172.16.1.99     255.255.255.0   UG    20     0        0 tuntap1
+ * 10.1.3.0        172.16.1.99     255.255.255.0   UG    20     0        0 tuntap1
+ * 10.1.4.0        172.16.1.99     255.255.255.0   UG    20     0        0 tuntap1
+ * 10.1.5.0        172.16.1.99     255.255.255.0   UG    20     0        0 tuntap1
+ * 10.2.1.0        172.16.2.99     255.255.255.0   UG    20     0        0 tuntap2
+ * 10.2.2.0        172.16.2.99     255.255.255.0   UG    20     0        0 tuntap2
+ * 10.2.3.0        172.16.2.99     255.255.255.0   UG    20     0        0 tuntap2
+ * 10.2.4.0        172.16.2.99     255.255.255.0   UG    20     0        0 tuntap2
+ * 10.2.5.0        172.16.2.99     255.255.255.0   UG    20     0        0 tuntap2
+ * 172.16.1.0	   0.0.0.0         255.255.255.0   U     0      0        0 tuntap1
+ * 172.16.2.0  	   0.0.0.0         255.255.255.0   U     0      0        0 tuntap2
  */
 
 
@@ -122,6 +129,20 @@ static const char * fmt_str(const char * fmt,
 
     return str;
 }
+
+static const char * fmt_str2(const char * fmt, 
+                             char * const str, 
+                             const size_t strlen, 
+                             const uint8_t val1,
+                             const uint8_t val2)
+{
+    memset(str, 0x0, strlen);
+
+    snprintf(str, strlen - 1, fmt, val1, val2);
+
+    return str;
+}
+
 
 
 static void print_hex(const char * buff, size_t const bufflen, const Colors & colors)
@@ -212,16 +233,21 @@ static uint16_t csum16v(const struct iovec * iov, const size_t iovn)
 
 static size_t build_rip(char * buff, size_t bufflen, uint8_t tunId)
 {
-   static uint8_t ripcnt = 0;
-
    Colors colors(bufflen, Color(COLOR_NRM));
 
    memset(buff, 0x0, bufflen);
 
-   auto eth = (struct ether_header *)  buff;       // offset 0
-   auto ip  = (struct iphdr *)        (buff + 14); // offset 14
-   auto udp = (struct udphdr *)       (buff + 34); // offset 34
+   static uint8_t ripcnt = 0;
 
+   const size_t eth_offset = 0;
+   const size_t ip_offset  = eth_offset + sizeof(ether_header);
+   const size_t udp_offset = ip_offset  + sizeof(iphdr);
+
+   auto eth = (struct ether_header *) (buff + eth_offset);
+   auto ip  = (struct iphdr *)        (buff + ip_offset);
+   auto udp = (struct udphdr *)       (buff + udp_offset);
+
+   // rip starts after udp header
    uint16_t udplen = sizeof(*udp);
 
    // first msg is rip request
@@ -229,22 +255,33 @@ static size_t build_rip(char * buff, size_t bufflen, uint8_t tunId)
     {
       ripreqmsg_t ripmsg;
 
-      udplen += sizeof(ripmsg);
+      // copy riphdr into buff offset ((eth + ip) + udplen)
+      memcpy(buff + udp_offset + udplen, &ripmsg, sizeof(ripmsg));
 
-      // copy rip into buff offset 42
-      memcpy(buff + 42, &ripmsg, sizeof(ripmsg));
+      udplen += sizeof(ripmsg);
     }
    else
     {
-      // rip response
-      riprespmsg_t ripmsg(fmt_str(rmtIPfmt, str1, sizeof(str1), tunId),
-                          fmt_str(rmtNWfmt, str2, sizeof(str2), tunId),
-                          1);
+      // rip respnse
+      riphdr_t riphdr(2);
 
-      udplen += sizeof(ripmsg);
+      // copy riphdr into buff offset ((eth + ip) + udplen)
+      memcpy(buff + udp_offset + udplen, &riphdr, sizeof(riphdr));
 
-      // copy rip into buff offset 42
-      memcpy(buff + 42, &ripmsg, sizeof(ripmsg));
+      udplen += sizeof(riphdr);
+
+      // construct for generating N rip entries
+      for(uint8_t idx = 1; idx <= 5; ++idx)
+       {
+          const ripentry_t ripentry {fmt_str2(rmtNWfmt, str1, sizeof(str1), tunId, idx), // net
+                                     rmtNMfmt,                                           // mask
+                                     10};                                                // metric
+
+          // copy ripentry into buff offset ((eth + ip) + udplen)
+          memcpy(buff + udp_offset + udplen, &ripentry, sizeof(ripentry));
+          
+          udplen += sizeof(ripentry_t);
+       }
     }
 
    // set eth hdr
@@ -272,8 +309,8 @@ static size_t build_rip(char * buff, size_t bufflen, uint8_t tunId)
    ip->check = ~csum16(ip, ip->ihl << 2);
 
    // ip type and proto
-   colors[14].c_ = COLOR_GRN;
-   colors[23].c_ = COLOR_GRN;
+   colors[ip_offset].c_     = COLOR_GRN;
+   colors[ip_offset + 9].c_ = COLOR_GRN;
  
    // set udp hdr
    udp->source = htons(ripPortNum); // rip port
@@ -298,7 +335,7 @@ static size_t build_rip(char * buff, size_t bufflen, uint8_t tunId)
    // udp csum
    udp->check = ~csum16v(chkv, 2);
 
-   const size_t result = sizeof(*eth) + sizeof(*ip) + udplen;
+   const size_t result = udp_offset + udplen;
 
    print_hex(buff, result, colors);
 
