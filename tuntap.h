@@ -8,6 +8,7 @@
 #include <string>
 #include <sys/uio.h>
 #include <netinet/ether.h>
+#include <linux/if_tun.h>
 
 class TunTap
 {

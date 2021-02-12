@@ -2,6 +2,8 @@
 #ifndef TUNTEST_TYPES_H
 #define TUNTEST_TYPES_H
 
+#include "defs.h"
+
 #include <vector>
 
 // add some color to our logs
@@ -11,8 +13,6 @@ struct Color {
 };
 
 using Colors = std::vector<Color>;
-
-const char * anyIPstr = "0.0.0.0";
 
 // building blocks for rip msgs
 
