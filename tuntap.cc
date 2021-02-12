@@ -3,6 +3,7 @@
 // tuntap wrapper
 
 
+#include "tuntap.h"
 
 #include <sys/socket.h>
 #include <sys/ioctl.h>
@@ -16,7 +17,6 @@
 #include <arpa/inet.h>
 #include <net/if.h>
 
-#include "tuntap.h"
 
 /*
  * this lookup is in host byte order

@@ -1,3 +1,6 @@
+#include "types.h"
+#include "defs.h"
+#include "netutils.h"
 
 #include <stdio.h>
 #include <ctype.h>
@@ -10,10 +13,6 @@
 #include <netinet/ip_icmp.h>
 
 #include <net/if_arp.h>
-
-#include "types.h"
-#include "defs.h"
-#include "netutils.h"
 
 // string fmt helper
 char str1[64];
@@ -140,6 +139,63 @@ uint16_t csum16v(const struct iovec * iov, const size_t iovn)
   return sum;
 }
 
+void set_ipv4_hdr(iphdr * ip, 
+                  const uint8_t hlen,
+                  const uint8_t tos,
+                  const uint8_t ttl,
+                  const uint16_t plen,
+                  const uint8_t proto,
+                  const in_addr_t src,
+                  const in_addr_t dst)
+ {
+   // set ip hdr
+   ip->version  = 4;
+   ip->ihl      = hlen >> 2;
+   ip->tos      = tos;
+   ip->tot_len  = htons(hlen + plen);
+   ip->id       = htons(0);
+   ip->frag_off = htons(0);
+   ip->ttl      = ttl;
+   ip->protocol = proto;
+   ip->check    = htons(0);
+   ip->saddr    = src; 
+   ip->daddr    = dst;
+   // set ip csum
+   ip->check = ~csum16(ip, ip->ihl << 2);
+}
+
+void set_udp_hdr(udphdr * udp,
+                 const uint16_t src, 
+                 const uint16_t dst, 
+                 const iphdr * ip,
+                 const void * data,
+                 const uint16_t dlen)
+{
+   // set udp hdr
+   udp->source = htons(src);
+   udp->dest   = htons(dst);
+   udp->len    = htons(sizeof(*udp) + dlen);
+   udp->check  = 0;
+
+   // udp pseudo sum
+   struct {
+     uint32_t src, dst;
+     uint8_t  mbz, proto;
+     uint16_t len;
+   } __attribute__((packed)) psum = {ip->saddr,
+                                     ip->daddr,
+                                     0,
+                                     ip->protocol,
+                                     udp->len};
+
+   const struct iovec chkv[3] = {{(void*)&psum,  sizeof(psum)}, 
+                                 {(void*)udp,    sizeof(*udp)},
+                                 {(void*)data,   dlen}};
+
+   // set udp csum
+   udp->check = ~csum16v(chkv, 3);
+}
+
 
 
 size_t build_rip_frame(char * buff, size_t buff_len, uint8_t tunId)
@@ -150,36 +206,38 @@ size_t build_rip_frame(char * buff, size_t buff_len, uint8_t tunId)
 
    static uint8_t ripcnt = 0;
 
-   const size_t eth_offset = 0;
-   const size_t ip_offset  = eth_offset + sizeof(ether_header);
-   const size_t udp_offset = ip_offset  + sizeof(iphdr);
+   const size_t eth_offset  = 0;
+   const size_t ip_offset   = eth_offset + sizeof(ether_header);
+   const size_t udp_offset  = ip_offset  + sizeof(iphdr);
+   const size_t data_offset = udp_offset + sizeof(udphdr);
 
-   auto eth = (struct ether_header *) (buff + eth_offset);
-   auto ip  = (struct iphdr *)        (buff + ip_offset);
-   auto udp = (struct udphdr *)       (buff + udp_offset);
+   auto eth  = (ether_header *) (buff + eth_offset);
+   auto ip   = (iphdr *)        (buff + ip_offset);
+   auto udp  = (udphdr *)       (buff + udp_offset);
+   auto data = (uint8_t *)      (buff + data_offset);
 
-   // rip starts after udp header
-   uint16_t udplen = sizeof(*udp);
+   // payload len
+   uint16_t data_len = 0;
 
    // first msg is rip request
    if(ripcnt++ == 0)
     {
       ripreqmsg_t ripmsg;
 
-      // copy riphdr into buff offset ((eth + ip) + udplen)
-      memcpy(buff + udp_offset + udplen, &ripmsg, sizeof(ripmsg));
+      // copy riphdr into buff
+      memcpy(data + data_len, &ripmsg, sizeof(ripmsg));
 
-      udplen += sizeof(ripmsg);
+      data_len += sizeof(ripmsg);
     }
    else
     {
       // rip respnse
       riphdr_t riphdr(2);
 
-      // copy riphdr into buff offset ((eth + ip) + udplen)
-      memcpy(buff + udp_offset + udplen, &riphdr, sizeof(riphdr));
+      // copy riphdr into buff
+      memcpy(data + data_len, &riphdr, sizeof(riphdr));
 
-      udplen += sizeof(riphdr);
+      data_len += sizeof(riphdr);
 
       // construct for generating N rip entries
       // these could be 'fetched' from some neighbor manager service and
@@ -190,10 +248,10 @@ size_t build_rip_frame(char * buff, size_t buff_len, uint8_t tunId)
                                      rmtNMfmt,                                           // mask
                                      10};                                                // metric
 
-          // copy ripentry into buff offset ((eth + ip) + udplen)
-          memcpy(buff + udp_offset + udplen, &ripentry, sizeof(ripentry));
+          // copy ripentry into buff
+          memcpy(data + data_len, &ripentry, sizeof(ripentry));
           
-          udplen += sizeof(ripentry_t);
+          data_len += sizeof(ripentry_t);
        }
     }
 
@@ -206,53 +264,40 @@ size_t build_rip_frame(char * buff, size_t buff_len, uint8_t tunId)
    colors[12].c_ = COLOR_YEL;
    colors[13].c_ = COLOR_YEL;
 
-   // set ip hdr
-   ip->version  = 4;
-   ip->ihl      = 5;
-   ip->tos      = 0;
-   ip->tot_len  = htons((ip->ihl << 2) + udplen);
-   ip->id       = htons(0);
-   ip->frag_off = htons(0);
-   ip->ttl      = 1;
-   ip->protocol = IPPROTO_UDP;
-   ip->check    = htons(0);
-   ip->saddr    = inet_addr(fmt_str(fauxIPfmt, str1, sizeof(str1), tunId));  // faux nbr ip
-   ip->daddr    = inet_addr(ripIPstr);                                       // ripv2
-   // set ip csum
-   ip->check = ~csum16(ip, ip->ihl << 2);
+   set_ipv4_hdr(ip,
+                20,                                                         // hlen
+                0,                                                          // tos
+                1,                                                          // ttl
+                sizeof(udphdr) + data_len,                                  // udp total len
+                IPPROTO_UDP,                                                // proto
+                inet_addr(fmt_str(fauxIPfmt, str1, sizeof(str1), tunId)),   // faux nbr ip
+                inet_addr(ripIPstr));                                       // ripv2
 
    // ip type and proto
    colors[ip_offset].c_     = COLOR_GRN;
    colors[ip_offset + 9].c_ = COLOR_GRN;
  
-   // set udp hdr
-   udp->source = htons(ripPortNum); // rip port
-   udp->dest   = htons(ripPortNum); // rip port
-   udp->len    = htons(udplen);
-   udp->check  = 0;
+   set_udp_hdr(udp,
+               ripPortNum, // rip port
+               ripPortNum, // rip port
+               ip,         // ip hdr
+               data,       // data
+               data_len);  // data len
 
-   // udp pseudo sum
-   struct {
-     uint32_t src, dst;
-     uint8_t  res, proto;
-     uint16_t len;
-   } __attribute__((packed)) psum = {ip->saddr,
-                                     ip->daddr,
-                                     0,
-                                     ip->protocol,
-                                     htons(udplen)};
+   print_hex(buff, data_offset + data_len, colors);
 
-   const struct iovec chkv[2] = {{(void*)&psum,  sizeof(psum)}, 
-                                 {(void*)udp,    udplen}};
+   return data_offset + data_len;
+}
 
-   // set udp csum
-   udp->check = ~csum16v(chkv, 2);
 
-   const size_t result = udp_offset + udplen;
+size_t build_igmp_query(struct ether_header * eth, struct iphdr * ip, uint32_t * ra, struct igmp * igmp, uint8_t tunId)
+{
+   memset(eth,  0x0, sizeof(*eth));
+   memset(ip,   0x0, sizeof(*ip));
+   memset(ra,   0x0, sizeof(*ra));
+   memset(igmp, 0x0, sizeof(*igmp));
 
-   print_hex(buff, result, colors);
-
-   return result;
+   return 0;
 }
 
 
@@ -413,7 +458,7 @@ int parse_frame(char *buff, size_t buff_len, size_t msg_len, uint8_t tunId)
                         if((htons(udp->source) == ripPortNum) && 
                            (htons(udp->dest)   == ripPortNum))
                          {
-                           // forged frame all ready send it now
+                           // forged frame using existing buffer
                            return build_rip_frame(buff, buff_len, tunId);
                          }
                      }

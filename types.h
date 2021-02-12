@@ -4,6 +4,7 @@
 
 #include "defs.h"
 
+#include <arpa/inet.h>
 #include <vector>
 
 // add some color to our logs

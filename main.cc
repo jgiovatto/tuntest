@@ -62,6 +62,10 @@
 //
 
 
+#include "tuntap.h"
+#include "netutils.h"
+#include "types.h"
+
 #include <stdio.h>
 #include <errno.h>
 #include <signal.h>
@@ -70,10 +74,6 @@
 #include <sys/time.h>
 
 #include <arpa/inet.h>
-
-#include "tuntap.h"
-#include "netutils.h"
-#include "types.h"
 
 #include <netinet/ip.h>
 #include <netinet/ether.h>
@@ -176,8 +176,22 @@ int main(int, char *[])
 
        if(num_ready == 0)
         {
-           printf("nothing to do for now\n");
+           struct ether_header eth;
+           struct iphdr         ip;
+           struct igmp        igmp;
+           uint32_t             ra;
 
+           for(uint8_t idx = 0; idx < NUM_TUN_TAP; ++idx)
+            {
+               build_igmp_query(&eth, &ip, &ra, &igmp, idx + 1);
+
+               struct iovec iov[4] = {{(void *) &eth,  sizeof(eth)},
+                                      {(void *) &ip,   sizeof(ip)},
+                                      {(void *) &ra,   sizeof(ra)},
+                                      {(void *) &igmp, sizeof(igmp)}};
+
+                tunTap[idx].writev(iov, 4);
+            }
         }
        else
         {

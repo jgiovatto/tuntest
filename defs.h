@@ -3,6 +3,8 @@
 #ifndef TUNTEST_DEFS_H
 #define TUNTEST_DEFS_H
 
+#include <stdint.h>
+
 #define COLOR_NRM "\033[0m"
 #define COLOR_BLE "\033[0;34m"
 #define COLOR_GRN "\033[0;32m"
