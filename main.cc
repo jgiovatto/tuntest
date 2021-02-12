@@ -151,6 +151,10 @@ static const char * fmt_str2(const char * fmt,
     return str;
 }
 
+static bool is_my_nbr(const in_addr_t nbr, const uint8_t tunId)
+{
+   return inet_addr(fmt_str(fauxIPfmt, str1, sizeof(str1), tunId)) == nbr;
+}
 
 
 static void print_hex(const char * buff, size_t const bufflen, const Colors & colors)
@@ -412,10 +416,7 @@ static int parse_frame(char *buff, size_t bufflen, size_t msglen, uint8_t tunId)
 
                 // check ip target
                 // again some neighbor manager service could be consulted to avoid sending an arp over the air
-                const in_addr_t nbr_ip = inet_addr(fmt_str(fauxIPfmt, str1, sizeof(str1), tunId));  // faux nbr ip
-
-                // check ip dst
-                if(nbr_ip == arp_req->tar_ip.s_addr)
+                if(is_my_nbr(arp_req->tar_ip.s_addr, tunId))
                   {
                     // swap src/target ip addrs
                     const in_addr tmp_ip = arp_req->tar_ip;
@@ -483,10 +484,8 @@ static int parse_frame(char *buff, size_t bufflen, size_t msglen, uint8_t tunId)
                                          htole64(ts->tv.tv_sec), htole64(ts->tv.tv_usec));
                                 }
 #endif
-                               const in_addr_t nbr_ip = inet_addr(fmt_str(fauxIPfmt, str1, sizeof(str1), tunId));  // faux nbr ip
-
-                               // again check ip dst is our faux/known nbr, just for fun
-                               if(nbr_ip == ip->daddr)
+                               // again check ip dst is our faux/known nbr, just for fun, normally let these go ota
+                               if(is_my_nbr(ip->daddr, tunId))
                                 {
                                   // turn into echo reply
                                   icmp->type = ICMP_ECHOREPLY;
