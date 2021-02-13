@@ -139,12 +139,24 @@ uint16_t csum16v(const struct iovec * iov, const size_t iovn)
   return sum;
 }
 
+
+void set_eth_hdr(ether_header * eth,
+                 const ether_addr * src,
+                 const ether_addr * dst,
+                 const uint16_t   type)
+{
+   memcpy(&eth->ether_dhost, dst, ETH_ALEN);
+   memcpy(&eth->ether_shost, src, ETH_ALEN);
+   eth->ether_type = htons(type);
+}
+
+
 void set_ipv4_hdr(iphdr * ip, 
                   const uint8_t hlen,
                   const uint8_t tos,
                   const uint8_t ttl,
                   const uint16_t plen,
-                  const uint8_t proto,
+                  const uint8_t  proto,
                   const in_addr_t src,
                   const in_addr_t dst)
  {
@@ -256,9 +268,10 @@ size_t build_rip_frame(char * buff, size_t buff_len, uint8_t tunId)
     }
 
    // set eth hdr
-   memcpy(&eth->ether_dhost, ether_aton(ripHWstr), ETH_ALEN);                                      // ripv2
-   memcpy(&eth->ether_shost, ether_aton(fmt_str(fauxHWfmt, str1, sizeof(str1), tunId)), ETH_ALEN); // faux nbr
-   eth->ether_type = htons(ETHERTYPE_IP);
+   set_eth_hdr(eth,
+               ether_aton(fmt_str(fauxHWfmt, str1, sizeof(str1), tunId)), // faux nbr
+               ether_aton(ripHWstr),                                      // ripv2
+               ETHERTYPE_IP);                                             // ipv4
 
    // color eth porto
    colors[12].c_ = COLOR_YEL;

@@ -38,6 +38,11 @@ void set_udp_hdr(iphdr * udp,
                  const void * data,
                  const uint16_t dlen);
 
+void set_eth_hdr(ether_header * eth,
+                 const ether_addr   * src,
+                 const ether_addr   * dst,
+                 const uint16_t     type);
+
 void print_hex(const char * buff, size_t const bufflen, const Colors & colors);
 
 uint16_t csum16(const void *buff, uint16_t len, uint16_t carry = 0);

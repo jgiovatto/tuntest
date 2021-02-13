@@ -22,6 +22,7 @@ const uint16_t ripPortNum = 520;
 
 // known ripv2 addrs
 #define   ripIPstr    "224.0.0.9"
+// see /usr/include/netinet/if_ether.h for mc hw fmt
 #define   ripHWstr    "01:00:5e:00:00:09"
 
 // local addr fmt
