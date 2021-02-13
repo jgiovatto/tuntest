@@ -24,6 +24,9 @@ const uint16_t ripPortNum = 520;
 #define   ripIPstr    "224.0.0.9"
 // see /usr/include/netinet/if_ether.h for mc hw fmt
 #define   ripHWstr    "01:00:5e:00:00:09"
+// all hosts
+#define   ahIPstr     "224.0.0.1"
+#define   ahHWstr     "01:00:5e:00:00:01"
 
 // local addr fmt
 #define localHWfmt  "02:02:00:00:%02hhx:01"

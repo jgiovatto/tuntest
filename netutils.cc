@@ -3,6 +3,7 @@
 #include "netutils.h"
 
 #include <stdio.h>
+#include <unistd.h>
 #include <ctype.h>
 #include <string.h>
 
@@ -14,8 +15,11 @@
 
 #include <net/if_arp.h>
 
-// string fmt helper
+// string fmt helpers
 char str1[64];
+
+// for ether_aton_r
+static struct ether_addr eth1, eth2;
 
 static bool is_my_nbr(const in_addr_t nbr, const uint8_t tunId)
 {
@@ -23,9 +27,9 @@ static bool is_my_nbr(const in_addr_t nbr, const uint8_t tunId)
 }
 
 
-const char * fmt_str(const char * fmt, 
-                     char * const str, 
-                     const size_t strlen, 
+const char * fmt_str(const char  * fmt, 
+                     char * const  str, 
+                     const size_t  strlen, 
                      const uint8_t val)
 {
     memset(str, 0x0, strlen);
@@ -34,9 +38,9 @@ const char * fmt_str(const char * fmt,
     return str;
 }
 
-const char * fmt_str2(const char * fmt, 
-                      char * const str, 
-                      const size_t strlen, 
+const char * fmt_str2(const char  * fmt, 
+                      char * const  str, 
+                      const size_t  strlen, 
                       const uint8_t val1,
                       const uint8_t val2)
 {
@@ -152,29 +156,36 @@ void set_eth_hdr(ether_header * eth,
 
 
 void set_ipv4_hdr(iphdr * ip, 
-                  const uint8_t hlen,
                   const uint8_t tos,
                   const uint8_t ttl,
+                  const uint16_t id,
                   const uint16_t plen,
                   const uint8_t  proto,
                   const in_addr_t src,
-                  const in_addr_t dst)
+                  const in_addr_t dst,
+                  const uint32_t * opts,
+                  const size_t numopts)
  {
    // set ip hdr
    ip->version  = 4;
-   ip->ihl      = hlen >> 2;
+   ip->ihl      = 5 + numopts;
    ip->tos      = tos;
-   ip->tot_len  = htons(hlen + plen);
-   ip->id       = htons(0);
+   ip->tot_len  = htons((ip->ihl << 2) + plen);
+   ip->id       = htons(id);
    ip->frag_off = htons(0);
    ip->ttl      = ttl;
    ip->protocol = proto;
-   ip->check    = htons(0);
+   ip->check    = 0;
    ip->saddr    = src; 
    ip->daddr    = dst;
-   // set ip csum
-   ip->check = ~csum16(ip, ip->ihl << 2);
+
+   // set ip csum ip and opts if any
+   const struct iovec chkv[2] = {{(void*)ip,   sizeof(*ip)}, 
+                                 {(void*)opts, numopts * 4}};
+
+   ip->check = ~csum16v(chkv, 2);
 }
+
 
 void set_udp_hdr(udphdr * udp,
                  const uint16_t src, 
@@ -200,12 +211,28 @@ void set_udp_hdr(udphdr * udp,
                                      ip->protocol,
                                      udp->len};
 
-   const struct iovec chkv[3] = {{(void*)&psum,  sizeof(psum)}, 
-                                 {(void*)udp,    sizeof(*udp)},
-                                 {(void*)data,   dlen}};
+   const struct iovec chkv[3] = {{(void*)&psum, sizeof(psum)}, 
+                                 {(void*)udp,   sizeof(*udp)},
+                                 {(void*)data,  dlen}};
 
    // set udp csum
    udp->check = ~csum16v(chkv, 3);
+}
+
+
+void set_igmp_hdr(igmp * igmp,
+                 const uint8_t type, 
+                 const uint8_t code, 
+                 const in_addr_t grp)
+{
+   // set igmp hdr
+   igmp->igmp_type         = type;
+   igmp->igmp_code         = code;
+   igmp->igmp_group.s_addr = grp;
+   igmp->igmp_cksum        = 0;
+
+   // set igmp csum
+   igmp->igmp_cksum  = ~csum16(igmp, sizeof(*igmp));
 }
 
 
@@ -220,7 +247,7 @@ size_t build_rip_frame(char * buff, size_t buff_len, uint8_t tunId)
 
    const size_t eth_offset  = 0;
    const size_t ip_offset   = eth_offset + sizeof(ether_header);
-   const size_t udp_offset  = ip_offset  + sizeof(iphdr);
+   const size_t udp_offset  = ip_offset  + sizeof(iphdr); // no ip options
    const size_t data_offset = udp_offset + sizeof(udphdr);
 
    auto eth  = (ether_header *) (buff + eth_offset);
@@ -269,22 +296,24 @@ size_t build_rip_frame(char * buff, size_t buff_len, uint8_t tunId)
 
    // set eth hdr
    set_eth_hdr(eth,
-               ether_aton(fmt_str(fauxHWfmt, str1, sizeof(str1), tunId)), // faux nbr
-               ether_aton(ripHWstr),                                      // ripv2
-               ETHERTYPE_IP);                                             // ipv4
+               ether_aton_r(fmt_str(fauxHWfmt, str1, sizeof(str1), tunId), &eth1), // faux nbr
+               ether_aton_r(ripHWstr, &eth2),                                      // ripv2
+               ETHERTYPE_IP);                                                      // ipv4
 
    // color eth porto
    colors[12].c_ = COLOR_YEL;
    colors[13].c_ = COLOR_YEL;
 
    set_ipv4_hdr(ip,
-                20,                                                         // hlen
-                0,                                                          // tos
+                0xC0,                                                       // tos
                 1,                                                          // ttl
+                0,                                                          // id
                 sizeof(udphdr) + data_len,                                  // udp total len
                 IPPROTO_UDP,                                                // proto
                 inet_addr(fmt_str(fauxIPfmt, str1, sizeof(str1), tunId)),   // faux nbr ip
-                inet_addr(ripIPstr));                                       // ripv2
+                inet_addr(ripIPstr),                                        // ripv2
+                nullptr,                                                    // options
+                0);                                                         // num options
 
    // ip type and proto
    colors[ip_offset].c_     = COLOR_GRN;
@@ -303,14 +332,41 @@ size_t build_rip_frame(char * buff, size_t buff_len, uint8_t tunId)
 }
 
 
-size_t build_igmp_query(struct ether_header * eth, struct iphdr * ip, uint32_t * ra, struct igmp * igmp, uint8_t tunId)
+void set_igmp_query(struct ether_header * eth, 
+                    struct iphdr        * ip, 
+                    uint32_t            * ipop, 
+                    struct igmp         * igmp,
+                    uint8_t             tunId)
 {
    memset(eth,  0x0, sizeof(*eth));
    memset(ip,   0x0, sizeof(*ip));
-   memset(ra,   0x0, sizeof(*ra));
+   memset(ipop, 0x0, sizeof(*ipop));
    memset(igmp, 0x0, sizeof(*igmp));
 
-   return 0;
+   set_eth_hdr(eth,
+               ether_aton_r(fmt_str(fauxHWfmt, str1, sizeof(str1), tunId), &eth1), // faux nbr
+               ether_aton_r(ahHWstr, &eth2),                                       // all hosts
+               ETHERTYPE_IP);                                                      // ipv4
+
+   // igmp uses the router alert option
+   *ipop = htonl(0x94040000);
+
+   set_ipv4_hdr(ip,
+                0xC0,                                                       // tos
+                1,                                                          // ttl
+                getpid(),                                                   // id
+                sizeof(*igmp),                                              // igmp payload
+                IPPROTO_IGMP,                                               // proto
+                inet_addr(fmt_str(fauxIPfmt, str1, sizeof(str1), tunId)),   // faux nbr ip
+                inet_addr(ahIPstr),                                         // all hosts
+                ipop,                                                       // options
+                1);                                                         // num options
+
+   set_igmp_hdr(igmp,
+                IGMP_MEMBERSHIP_QUERY, // query
+                0x64,                  // 10 sec response time
+                inet_addr(anyIPstr));  // any grp
+
 }
 
 
@@ -374,7 +430,7 @@ int parse_frame(char *buff, size_t buff_len, size_t msg_len, uint8_t tunId)
 
                     // swap src/target hw addrs
                     memcpy(&arp_req->tar_hw, &arp_req->src_hw,  ETH_ALEN);
-                    memcpy(&arp_req->src_hw, ether_aton(fmt_str(fauxHWfmt, str1, sizeof(str1), tunId)), ETH_ALEN); // faux nbr
+                    memcpy(&arp_req->src_hw, ether_aton_r(fmt_str(fauxHWfmt, str1, sizeof(str1), tunId), &eth1), ETH_ALEN); // faux nbr
             
                     // set as reply   
                     arp->ar_op = htons(ARPOP_REPLY);
@@ -489,7 +545,7 @@ int parse_frame(char *buff, size_t buff_len, size_t msg_len, uint8_t tunId)
        {
          // must swap eth src/dst
          memcpy(&eth->ether_dhost, &eth->ether_shost, ETH_ALEN);
-         memcpy(&eth->ether_shost, ether_aton(fmt_str(fauxHWfmt, str1, sizeof(str1), tunId)), ETH_ALEN); // faux nbr
+         memcpy(&eth->ether_shost, ether_aton_r(fmt_str(fauxHWfmt, str1, sizeof(str1), tunId), &eth1), ETH_ALEN); // faux nbr
        }
 
     }

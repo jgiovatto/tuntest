@@ -98,6 +98,11 @@ static void sig_handle(int sig)
     }
 }
 
+static size_t idx_to_tunid(size_t idx)
+ {
+    return idx + 1;
+ }
+
 int main(int, char *[])
 {
     signal(SIGINT,  sig_handle);
@@ -116,11 +121,9 @@ int main(int, char *[])
 
     for(uint8_t idx = 0; idx < NUM_TUN_TAP; ++idx)
      {
-       const uint8_t tunId = idx + 1;
-
        // open device
        if(tunTap[idx].open("/dev/net/tun", 
-            fmt_str(tunTapfmt, str1, sizeof(str1), tunId), 
+            fmt_str(tunTapfmt, str1, sizeof(str1), idx_to_tunid(idx)), 
               IFF_TAP | IFF_NO_PI) < 0)
         {
            bye("tun open");
@@ -128,14 +131,14 @@ int main(int, char *[])
 
        // set ip addr
        if(tunTap[idx].set_ip_address(inet_addr(
-             fmt_str(localIPfmt, str1, sizeof(str1), tunId)), 24) < 0)
+             fmt_str(localIPfmt, str1, sizeof(str1), idx_to_tunid(idx))), 24) < 0)
         {
            bye("tun set ip");
         }
 
        // set hw addr
        if(tunTap[idx].set_hw_address(ether_aton(
-             fmt_str(localHWfmt, str1, sizeof(str1), tunId))) < 0)
+             fmt_str(localHWfmt, str1, sizeof(str1), idx_to_tunid(idx)))) < 0)
         {
            bye("tun set ip");
         }
@@ -174,28 +177,45 @@ int main(int, char *[])
  
        int num_ready = select(fd_max + 1, &rfds, nullptr, nullptr, &tv);
 
-       if(num_ready == 0)
+       // timed out lets do something
+       if((num_ready == 0) && bRunning)
         {
-           struct ether_header eth;
            struct iphdr         ip;
+           uint32_t            opt;
+           struct ether_header eth;
            struct igmp        igmp;
-           uint32_t             ra;
 
+           // build an igmp query for each interface
            for(uint8_t idx = 0; idx < NUM_TUN_TAP; ++idx)
             {
-               build_igmp_query(&eth, &ip, &ra, &igmp, idx + 1);
+               set_igmp_query(&eth, &ip, &opt, &igmp, idx + 1);
 
-               struct iovec iov[4] = {{(void *) &eth,  sizeof(eth)},
-                                      {(void *) &ip,   sizeof(ip)},
-                                      {(void *) &ra,   sizeof(ra)},
-                                      {(void *) &igmp, sizeof(igmp)}};
+               // alternative to using a contiguous buffer
+               // scatter/gather i/o is helpful for
+               // buffer boundry alignment issues
+               // that may arise due to the 14 byte ether header.
 
-                tunTap[idx].writev(iov, 4);
+               // order is important here
+               struct iovec iov[4] = {{(void *) &eth,  sizeof(eth)},   // eth hdr
+                                      {(void *) &ip,   sizeof(ip)},    // ip hdr
+                                      {(void *) &opt,  sizeof(opt)},   // ip option
+                                      {(void *) &igmp, sizeof(igmp)}}; // igmp hdr
+
+               tunTap[idx].writev(iov, 4);
+
+              // eventually we should see some igmpv2 activity
+              //
+              // sudo tcpdump -i tuntap1 -vvv -xxx -n -nn igmp
+              // IP (tos 0xc0, ttl 1, id 42136, offset 0, flags [none], proto IGMP (2), length 32, options (RA))
+              // 172.16.1.99 > 224.0.0.1: igmp query v2
+              //
+              // IP (tos 0xc0, ttl 1, id 0, offset 0, flags [DF], proto IGMP (2), length 32, options (RA))
+              // 172.16.1.1 > 224.0.0.251: igmp v2 report 224.0.0.251
             }
         }
        else
         {
-          while(num_ready > 0 && bRunning)
+          while((num_ready > 0) && bRunning)
            {
              for(uint8_t idx = 0; idx < NUM_TUN_TAP; ++idx)
               {
@@ -207,7 +227,7 @@ int main(int, char *[])
 
                     if(num_read > 0) 
                      {
-                        const int num_write = parse_frame(buff, sizeof(buff), num_read, idx + 1);
+                        const int num_write = parse_frame(buff, sizeof(buff), num_read, idx_to_tunid(idx));
 
                         // bounce something back
                         if(num_write > 0)
