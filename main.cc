@@ -173,33 +173,35 @@ int main(int, char *[])
        fd_set rfds = read_fds;
      
        // wait for 10 sec 
-       struct timeval tv = {10, 0};
+       timeval tv = {1, 0};  // XXX
  
        int num_ready = select(fd_max + 1, &rfds, nullptr, nullptr, &tv);
 
        // timed out lets do something
        if((num_ready == 0) && bRunning)
         {
-           struct iphdr         ip;
-           uint32_t            opt;
-           struct ether_header eth;
-           struct igmp        igmp;
+           // alternative to using a contiguous buffer
+           // scatter/gather i/o is helpful for
+           // buffer boundry alignment issues
+           // that may arise due to the 14 byte ether header.
+ 
+           // the are common
+           ether_header eth;
+           iphdr        ip;
+           uint32_t     opt;
 
+#if 0             
            // build an igmp query for each interface
            for(uint8_t idx = 0; idx < NUM_TUN_TAP; ++idx)
             {
+               igmp igmp;
                set_igmp_query(&eth, &ip, &opt, &igmp, idx + 1);
 
-               // alternative to using a contiguous buffer
-               // scatter/gather i/o is helpful for
-               // buffer boundry alignment issues
-               // that may arise due to the 14 byte ether header.
-
                // order is important here
-               struct iovec iov[4] = {{(void *) &eth,  sizeof(eth)},   // eth hdr
-                                      {(void *) &ip,   sizeof(ip)},    // ip hdr
-                                      {(void *) &opt,  sizeof(opt)},   // ip option
-                                      {(void *) &igmp, sizeof(igmp)}}; // igmp hdr
+               const iovec iov[4] = {{(void *) &eth,  sizeof(eth)},   // eth hdr
+                                    {(void *)  &ip,   sizeof(ip)},    // ip hdr
+                                    {(void *)  &opt,  sizeof(opt)},   // ip option
+                                    {(void *)  &igmp, sizeof(igmp)}}; // igmp hdr
 
                tunTap[idx].writev(iov, 4);
 
@@ -211,6 +213,26 @@ int main(int, char *[])
               //
               // IP (tos 0xc0, ttl 1, id 0, offset 0, flags [DF], proto IGMP (2), length 32, options (RA))
               // 172.16.1.1 > 224.0.0.251: igmp v2 report 224.0.0.251
+            }
+#endif
+           // build a dvmrp probe for each interface
+           for(uint8_t idx = 0; idx < NUM_TUN_TAP; ++idx)
+            {
+               dvmrphdr               dhdr;
+               dvmrpprobe             probe;
+               std::vector<in_addr_t> nbrs;              
+ 
+               set_dvmrp_probe(&eth, &ip, &opt, &dhdr, &probe, nbrs.size(), idx + 1);
+
+               // order is important here
+               const  iovec iov[6] = {{(void *) &eth,        sizeof(eth)},              // eth hdr
+                                      {(void *) &ip,         sizeof(ip)},               // ip hdr
+                                      {(void *) &opt,        sizeof(opt)},              // ip option
+                                      {(void *) &dhdr,       sizeof(dhdr)},             // dvmrp hdr
+                                      {(void *) &probe,      sizeof(probe)},            // dvmrp probe
+                                      {(void *) nbrs.data(), sizeof(nbrs.size() * 4)}}; // nbrs
+
+               tunTap[idx].writev(iov, nbrs.empty() ? 5 : 6);
             }
         }
        else

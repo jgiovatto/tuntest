@@ -108,7 +108,7 @@ void print_hex(const char * buff, size_t const buff_len, const Colors & colors)
 }
 
 
-uint16_t csum16(const void *buff, uint16_t len, uint16_t carry)
+uint16_t csum16(const void *buff, uint16_t len, const uint16_t carry)
 {
   uint32_t sum = carry;
 
@@ -237,7 +237,7 @@ void set_igmp_hdr(igmp * igmp,
 
 
 
-size_t build_rip_frame(char * buff, size_t buff_len, uint8_t tunId)
+size_t build_rip_frame(char * buff, const size_t buff_len, const uint8_t tunId)
 {
    Colors colors(buff_len, Color(COLOR_NRM));
 
@@ -369,9 +369,49 @@ void set_igmp_query(struct ether_header * eth,
 
 }
 
+void set_dvmrp_probe(ether_header * eth, 
+                     iphdr * ip, 
+                     uint32_t * ipop,
+                     dvmrphdr * dhdr, 
+                     dvmrpprobe * probe, 
+                     const size_t numnbrs, 
+                     const uint8_t tunId)
+{
+   memset(eth,   0x0, sizeof(*eth));
+   memset(ip,    0x0, sizeof(*ip));
+   memset(ipop,  0x0, sizeof(*ipop));
+   memset(dhdr,  0x0, sizeof(*dhdr));
+   memset(probe, 0x0, sizeof(*probe));
+
+   set_eth_hdr(eth,
+               ether_aton_r(fmt_str(fauxHWfmt, str1, sizeof(str1), tunId), &eth1), // faux nbr
+               ether_aton_r(dvmrpHWstr, &eth2),                                    // all dvmrp routers
+               ETHERTYPE_IP);                                                      // ipv4
+
+   // igmp uses the router alert option
+   *ipop = htonl(0x94040000);
+
+   set_ipv4_hdr(ip,
+                0xC0,                                                       // tos
+                1,                                                          // ttl
+                getpid(),                                                   // id
+                sizeof(*dhdr) + sizeof(*probe) + numnbrs * 4,               // payload
+                IPPROTO_IGMP,                                               // proto
+                inet_addr(fmt_str(fauxIPfmt, str1, sizeof(str1), tunId)),   // faux nbr ip
+                inet_addr(dvmrpIPstr),                                      // all dvmrp routers
+                ipop,                                                       // options
+                1);                                                         // num options
 
 
-int parse_frame(char *buff, size_t buff_len, size_t msg_len, uint8_t tunId)
+  dhdr->type = IGMP_DVMRP;
+  dhdr->code = 0x1; // probe
+  dhdr->check = 0;
+
+}
+
+
+
+int parse_frame(char *buff, const size_t buff_len, const size_t msg_len, const uint8_t tunId)
 {
     Colors colors(msg_len, Color(COLOR_NRM));
 

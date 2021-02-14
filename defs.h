@@ -20,26 +20,31 @@ extern char str1[64];
 
 const uint16_t ripPortNum = 520;
 
+// see /usr/include/netinet/if_ether.h for mc hw fmt
+//
+// dvmrp ip addr
+#define   dvmrpIPstr  "224.0.0.4"
+#define   dvmrpHWstr  "01:00:5e:00:00:04"
+
 // known ripv2 addrs
 #define   ripIPstr    "224.0.0.9"
-// see /usr/include/netinet/if_ether.h for mc hw fmt
 #define   ripHWstr    "01:00:5e:00:00:09"
 // all hosts
 #define   ahIPstr     "224.0.0.1"
 #define   ahHWstr     "01:00:5e:00:00:01"
 
 // local addr fmt
-#define localHWfmt  "02:02:00:00:%02hhx:01"
-#define localIPfmt  "172.16.%hhu.1"
+#define localHWfmt    "02:02:00:00:%02hhx:01"
+#define localIPfmt    "172.16.%hhu.1"
 
 // faux nbr (99) addr fmt
-#define fauxHWfmt  "02:02:00:00:%02hhx:63"
-#define fauxIPfmt  "172.16.%hhu.99"
+#define fauxHWfmt     "02:02:00:00:%02hhx:63"
+#define fauxIPfmt     "172.16.%hhu.99"
 
 // faux nbr attached lan segment(s) fmt
-#define rmtNWfmt  "10.%hhu.%hhu.0"
-#define rmtNMfmt  "255.255.255.0"
+#define rmtNWfmt      "10.%hhu.%hhu.0"
+#define rmtNMfmt      "255.255.255.0"
 
-#define anyIPstr   "0.0.0.0"
+#define anyIPstr      "0.0.0.0"
 
 #endif

@@ -6,9 +6,25 @@
 #include <netinet/udp.h>
 #include <netinet/igmp.h>
 
+#include <vector>
 
 #ifndef TUNTEST_NETUTILS_H
 #define TUNTEST_NETUTILS_H
+
+struct dvmrphdr {
+    uint8_t  type;
+    uint8_t  code;
+    uint16_t check;
+} __attribute__((packed));
+
+
+struct dvmrpprobe {
+    uint16_t cap;
+    uint8_t  minor;
+    uint8_t  major;
+} __attribute__((packed));
+
+
 
 const char * fmt_str(const char * fmt, 
                      char * const str, 
@@ -54,7 +70,16 @@ void set_igmp_query(ether_header * eth,
                     iphdr * ip, 
                     uint32_t * ipop,
                     igmp * igmp, 
-                    uint8_t tunId);
+                    const uint8_t tunId);
+
+void set_dvmrp_probe(ether_header * eth, 
+                     iphdr * ip, 
+                     uint32_t * ipop,
+                     dvmrphdr * hdr, 
+                     dvmrpprobe * probe, 
+                     const size_t numnbrs,
+                     const uint8_t tunId);
+
 
 
 void print_hex(const char * buff, size_t const bufflen, const Colors & colors);

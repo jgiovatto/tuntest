@@ -1,3 +1,2 @@
-main.o
-tuntap.o
+*.o
 tuntest
