@@ -6,6 +6,7 @@
 #include <unistd.h>
 #include <ctype.h>
 #include <string.h>
+#include <time.h>
 
 #include <arpa/inet.h>
 #include <netinet/ip.h>
@@ -373,15 +374,15 @@ void set_dvmrp_probe(ether_header * eth,
                      iphdr * ip, 
                      uint32_t * ipop,
                      dvmrphdr * dhdr, 
-                     dvmrpprobe * probe, 
-                     const size_t numnbrs, 
+                     dvmrpprobe * dprobe, 
+                     const InAddrs & nbrs,
                      const uint8_t tunId)
 {
-   memset(eth,   0x0, sizeof(*eth));
-   memset(ip,    0x0, sizeof(*ip));
-   memset(ipop,  0x0, sizeof(*ipop));
-   memset(dhdr,  0x0, sizeof(*dhdr));
-   memset(probe, 0x0, sizeof(*probe));
+   memset(eth,    0x0, sizeof(*eth));
+   memset(ip,     0x0, sizeof(*ip));
+   memset(ipop,   0x0, sizeof(*ipop));
+   memset(dhdr,   0x0, sizeof(*dhdr));
+   memset(dprobe, 0x0, sizeof(*dprobe));
 
    set_eth_hdr(eth,
                ether_aton_r(fmt_str(fauxHWfmt, str1, sizeof(str1), tunId), &eth1), // faux nbr
@@ -395,18 +396,29 @@ void set_dvmrp_probe(ether_header * eth,
                 0xC0,                                                       // tos
                 1,                                                          // ttl
                 getpid(),                                                   // id
-                sizeof(*dhdr) + sizeof(*probe) + numnbrs * 4,               // payload
+                sizeof(*dhdr) + sizeof(*dprobe) + nbrs.size() * 4,          // payload
                 IPPROTO_IGMP,                                               // proto
                 inet_addr(fmt_str(fauxIPfmt, str1, sizeof(str1), tunId)),   // faux nbr ip
                 inet_addr(dvmrpIPstr),                                      // all dvmrp routers
                 ipop,                                                       // options
                 1);                                                         // num options
 
+   const struct iovec chkv[3] = {{(void*)dhdr,        sizeof(*dhdr)}, 
+                                 {(void*)dprobe,      sizeof(*dprobe)},
+                                 {(void*)nbrs.data(), nbrs.size() * 4}};
 
-  dhdr->type = IGMP_DVMRP;
-  dhdr->code = 0x1; // probe
+
+  dhdr->type  = IGMP_DVMRP;
+  dhdr->code  = 0x1; // dvmrp probe
   dhdr->check = 0;
 
+  dprobe->cap   = htons(0x07); // genid, prune, leaf
+  dprobe->minor = 0xFF;
+  dprobe->major = 0x03;
+  dprobe->genid = htonl(time(NULL));
+
+  // set dvmrp hdr csum
+  dhdr->check = ~csum16v(chkv, 3);
 }
 
 

@@ -218,18 +218,18 @@ int main(int, char *[])
            // build a dvmrp probe for each interface
            for(uint8_t idx = 0; idx < NUM_TUN_TAP; ++idx)
             {
-               dvmrphdr               dhdr;
-               dvmrpprobe             probe;
-               std::vector<in_addr_t> nbrs;              
+               dvmrphdr    dvmrphdr;
+               dvmrpprobe  dvmrpprobe;
+               InAddrs     nbrs;
  
-               set_dvmrp_probe(&eth, &ip, &opt, &dhdr, &probe, nbrs.size(), idx + 1);
+               set_dvmrp_probe(&eth, &ip, &opt, &dvmrphdr, &dvmrpprobe, nbrs, idx_to_tunid(idx));
 
                // order is important here
                const  iovec iov[6] = {{(void *) &eth,        sizeof(eth)},              // eth hdr
                                       {(void *) &ip,         sizeof(ip)},               // ip hdr
                                       {(void *) &opt,        sizeof(opt)},              // ip option
-                                      {(void *) &dhdr,       sizeof(dhdr)},             // dvmrp hdr
-                                      {(void *) &probe,      sizeof(probe)},            // dvmrp probe
+                                      {(void *) &dvmrphdr,   sizeof(dvmrphdr)},         // dvmrp hdr
+                                      {(void *) &dvmrpprobe, sizeof(dvmrpprobe)},       // dvmrp probe
                                       {(void *) nbrs.data(), sizeof(nbrs.size() * 4)}}; // nbrs
 
                tunTap[idx].writev(iov, nbrs.empty() ? 5 : 6);

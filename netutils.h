@@ -11,6 +11,9 @@
 #ifndef TUNTEST_NETUTILS_H
 #define TUNTEST_NETUTILS_H
 
+
+using InAddrs = std::vector<in_addr_t>;
+
 struct dvmrphdr {
     uint8_t  type;
     uint8_t  code;
@@ -22,6 +25,7 @@ struct dvmrpprobe {
     uint16_t cap;
     uint8_t  minor;
     uint8_t  major;
+    uint32_t genid;
 } __attribute__((packed));
 
 
@@ -77,7 +81,7 @@ void set_dvmrp_probe(ether_header * eth,
                      uint32_t * ipop,
                      dvmrphdr * hdr, 
                      dvmrpprobe * probe, 
-                     const size_t numnbrs,
+                     const InAddrs & nbrs,
                      const uint8_t tunId);
 
 
