@@ -20,7 +20,7 @@
 char str1[64];
 
 // for ether_aton_r
-static struct ether_addr eth1, eth2;
+static ether_addr eth1, eth2;
 
 static bool is_my_nbr(const in_addr_t nbr, const uint8_t tunId)
 {
@@ -39,14 +39,15 @@ const char * fmt_str(const char  * fmt,
     return str;
 }
 
-const char * fmt_str2(const char  * fmt, 
-                      char * const  str, 
-                      const size_t  strlen, 
-                      const uint8_t val1,
-                      const uint8_t val2)
+const char * fmt_str(const char  * fmt, 
+                     char * const  str, 
+                     const size_t  strlen, 
+                     const uint8_t val1,
+                     const uint8_t val2,
+                     const uint8_t val3)
 {
     memset(str, 0x0, strlen);
-    snprintf(str, strlen - 1, fmt, val1, val2);
+    snprintf(str, strlen - 1, fmt, val1, val2, val3);
 
     return str;
 }
@@ -132,7 +133,7 @@ uint16_t csum16(const void *buff, uint16_t len, const uint16_t carry)
 }
 
 
-uint16_t csum16v(const struct iovec * iov, const size_t iovn)
+uint16_t csum16v(const iovec * iov, const size_t iovn)
 {
   uint16_t sum = 0;
 
@@ -181,8 +182,8 @@ void set_ipv4_hdr(iphdr * ip,
    ip->daddr    = dst;
 
    // set ip csum ip and opts if any
-   const struct iovec chkv[2] = {{(void*)ip,   sizeof(*ip)}, 
-                                 {(void*)opts, numopts * 4}};
+   const iovec chkv[2] = {{(void*)ip,   sizeof(*ip)}, 
+                          {(void*)opts, numopts * 4}};
 
    ip->check = ~csum16v(chkv, 2);
 }
@@ -212,9 +213,9 @@ void set_udp_hdr(udphdr * udp,
                                      ip->protocol,
                                      udp->len};
 
-   const struct iovec chkv[3] = {{(void*)&psum, sizeof(psum)}, 
-                                 {(void*)udp,   sizeof(*udp)},
-                                 {(void*)data,  dlen}};
+   const iovec chkv[3] = {{(void*)&psum, sizeof(psum)}, 
+                          {(void*)udp,   sizeof(*udp)},
+                          {(void*)data,  dlen}};
 
    // set udp csum
    udp->check = ~csum16v(chkv, 3);
@@ -282,17 +283,14 @@ size_t build_rip_frame(char * buff, const size_t buff_len, const uint8_t tunId)
       // construct for generating N rip entries
       // these could be 'fetched' from some neighbor manager service and
       // populated into the rip msg here
-      for(uint8_t idx = 1; idx <= 5; ++idx)
-       {
-          const ripentry_t ripentry {fmt_str2(rmtNWfmt, str1, sizeof(str1), tunId, idx), // net
-                                     rmtNMfmt,                                           // mask
-                                     10};                                                // metric
+      const ripentry_t ripentry {fmt_str(rmtNWfmt, str1, sizeof(str1), tunId, 1, 0), // net
+                                 rmtNMfmt,                                           // mask
+                                 10};                                                // metric
 
-          // copy ripentry into buff
-          memcpy(data + data_len, &ripentry, sizeof(ripentry));
+      // copy ripentry into buff
+      memcpy(data + data_len, &ripentry, sizeof(ripentry));
           
-          data_len += sizeof(ripentry_t);
-       }
+      data_len += sizeof(ripentry_t);
     }
 
    // set eth hdr
@@ -306,7 +304,7 @@ size_t build_rip_frame(char * buff, const size_t buff_len, const uint8_t tunId)
    colors[13].c_ = COLOR_YEL;
 
    set_ipv4_hdr(ip,
-                0xC0,                                                       // tos
+                TOS_NC,                                                     // tos
                 1,                                                          // ttl
                 0,                                                          // id
                 sizeof(udphdr) + data_len,                                  // udp total len
@@ -333,11 +331,11 @@ size_t build_rip_frame(char * buff, const size_t buff_len, const uint8_t tunId)
 }
 
 
-void set_igmp_query(struct ether_header * eth, 
-                    struct iphdr        * ip, 
-                    uint32_t            * ipop, 
-                    struct igmp         * igmp,
-                    uint8_t             tunId)
+void set_igmp_query(ether_header * eth, 
+                    iphdr        * ip, 
+                    uint32_t     * ipop, 
+                    igmp         * igmp,
+                    uint8_t       tunId)
 {
    memset(eth,  0x0, sizeof(*eth));
    memset(ip,   0x0, sizeof(*ip));
@@ -350,10 +348,10 @@ void set_igmp_query(struct ether_header * eth,
                ETHERTYPE_IP);                                                      // ipv4
 
    // igmp uses the router alert option
-   *ipop = htonl(0x94040000);
+   *ipop = htonl(ROUTER_ALERT);
 
    set_ipv4_hdr(ip,
-                0xC0,                                                       // tos
+                TOS_NC,                                                     // tos
                 1,                                                          // ttl
                 getpid(),                                                   // id
                 sizeof(*igmp),                                              // igmp payload
@@ -390,32 +388,37 @@ void set_dvmrp_probe(ether_header * eth,
                ETHERTYPE_IP);                                                      // ipv4
 
    // igmp uses the router alert option
-   *ipop = htonl(0x94040000);
+   *ipop = htonl(ROUTER_ALERT);
 
    set_ipv4_hdr(ip,
-                0xC0,                                                       // tos
+                TOS_NC,                                                     // tos
                 1,                                                          // ttl
                 getpid(),                                                   // id
-                sizeof(*dhdr) + sizeof(*dprobe) + nbrs.size() * 4,          // payload
+                sizeof(*dhdr) + sizeof(*dprobe) + (nbrs.size() * 4),        // payload
                 IPPROTO_IGMP,                                               // proto
                 inet_addr(fmt_str(fauxIPfmt, str1, sizeof(str1), tunId)),   // faux nbr ip
                 inet_addr(dvmrpIPstr),                                      // all dvmrp routers
                 ipop,                                                       // options
                 1);                                                         // num options
 
-   const struct iovec chkv[3] = {{(void*)dhdr,        sizeof(*dhdr)}, 
-                                 {(void*)dprobe,      sizeof(*dprobe)},
-                                 {(void*)nbrs.data(), nbrs.size() * 4}};
-
 
   dhdr->type  = IGMP_DVMRP;
-  dhdr->code  = 0x1; // dvmrp probe
+  dhdr->code  = 0x1;        // dvmrp probe
   dhdr->check = 0;
 
-  dprobe->cap   = htons(0x07); // genid, prune, leaf
+  dprobe->cap = htons(DVMRP_G + DVMRP_P); // genid, prune
+
+  if(nbrs.empty()) {
+    dprobe->cap += htons(DVMRP_L); // leaf
+  }
+
   dprobe->minor = 0xFF;
   dprobe->major = 0x03;
   dprobe->genid = htonl(time(NULL));
+
+  const iovec chkv[3] = {{(void*)dhdr,        sizeof(*dhdr)}, 
+                         {(void*)dprobe,      sizeof(*dprobe)},
+                         {(void*)nbrs.data(), nbrs.size() * 4}};
 
   // set dvmrp hdr csum
   dhdr->check = ~csum16v(chkv, 3);
@@ -433,14 +436,14 @@ int parse_frame(char *buff, const size_t buff_len, const size_t msg_len, const u
 
     if(msg_len > sizeof(ether_header))
     {
-        struct ether_header * eth = (struct ether_header *) buff;
+        ether_header * eth = (ether_header *) buff;
 
         const uint16_t ether_type = htons(eth->ether_type);
 
         // sanity check ethhdr + arphdr + 2(eth/ipv4) and ether_type_arp
-        if((msg_len == sizeof(struct ether_header) + sizeof(struct arphdr) + (20)) && (ether_type == ETHERTYPE_ARP))
+        if((msg_len == sizeof(ether_header) + sizeof(arphdr) + (20)) && (ether_type == ETHERTYPE_ARP))
         {
-            struct arphdr * arp = (struct arphdr*) (eth + 1);
+            arphdr * arp = (arphdr*) (eth + 1);
 
             // color eth proto 
             colors[12].c_ = COLOR_YEL;
@@ -455,12 +458,12 @@ int parse_frame(char *buff, const size_t buff_len, const size_t msg_len, const u
                (arp->ar_pln        == 4))
             {
                 struct arp_ipv4_req_ {
-                    struct ether_addr src_hw;
+                    ether_addr src_hw;
                     in_addr           src_ip;
 
-                    struct ether_addr tar_hw;
+                    ether_addr tar_hw;
                     in_addr           tar_ip;
-                } __attribute__((packed)) * arp_req = (struct arp_ipv4_req_ *) (arp + 1);
+                } __attribute__((packed)) * arp_req = (arp_ipv4_req_ *) (arp + 1);
 #ifdef DEBUG
                 printf(COLOR_YEL "in  ETH ARP:");
                 printf("t_hw [%s]",   ether_ntoa(&arp_req->tar_hw));
@@ -502,9 +505,9 @@ int parse_frame(char *buff, const size_t buff_len, const size_t msg_len, const u
              }
         }
         // sanity check for eth/ipv4
-        else if((msg_len > sizeof(struct iphdr)) && (ether_type == ETHERTYPE_IP))
+        else if((msg_len > sizeof(iphdr)) && (ether_type == ETHERTYPE_IP))
         {
-            struct iphdr * ip = (struct iphdr*) (eth + 1);
+            iphdr * ip = (iphdr*) (eth + 1);
 
             const size_t iphl = ip->ihl << 2;       // iphdr len may vary
             const size_t iptl = ntohs(ip->tot_len);
@@ -521,7 +524,7 @@ int parse_frame(char *buff, const size_t buff_len, const size_t msg_len, const u
                  {
                     case IPPROTO_ICMP:
                      {
-                       struct icmphdr * icmp = (struct icmphdr *) (buff + sizeof(ether_header) + iphl);
+                       icmphdr * icmp = (icmphdr *) (buff + sizeof(ether_header) + iphl);
 
                        const size_t icmplen = iptl - iphl;
 
@@ -530,12 +533,12 @@ int parse_frame(char *buff, const size_t buff_len, const size_t msg_len, const u
                            if(icmp->type == ICMP_ECHO)
                              {
 #ifdef DEBUG
-                               if(icmplen >= (sizeof(icmphdr) + sizeof(struct timeval)))
+                               if(icmplen >= (sizeof(icmphdr) + sizeof(timeval)))
                                 {
                                   // see man ping for timestamp position
                                   struct ts_ {
-                                    struct timeval tv;
-                                  } __attribute__((packed))* ts = (struct ts_*) (icmp + 1);
+                                    timeval tv;
+                                  } __attribute__((packed))* ts = (ts_*) (icmp + 1);
                                   printf("ETH IPv4 ICMP ECHO_REQ seq %hu, ts %ld:%06ld\n", 
                                          ntohs(icmp->un.echo.sequence),
                                          htole64(ts->tv.tv_sec), htole64(ts->tv.tv_usec));
@@ -573,7 +576,7 @@ int parse_frame(char *buff, const size_t buff_len, const size_t msg_len, const u
 
                     case IPPROTO_UDP:
                      {
-                        auto udp = (struct udphdr *) (buff + sizeof(ether_header) + iphl);
+                        auto udp = (udphdr *) (buff + sizeof(ether_header) + iphl);
 
                         // XXX TODO check for actual rip header, this should do for now
                         if((htons(udp->source) == ripPortNum) && 

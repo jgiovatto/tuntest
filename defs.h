@@ -20,6 +20,10 @@ extern char str1[64];
 
 const uint16_t ripPortNum = 520;
 
+const uint32_t ROUTER_ALERT = 0x94040000;
+
+const uint8_t  TOS_NC = 0xC0;
+
 // see /usr/include/netinet/if_ether.h for mc hw fmt
 //
 // dvmrp ip addr
@@ -42,9 +46,15 @@ const uint16_t ripPortNum = 520;
 #define fauxIPfmt     "172.16.%hhu.99"
 
 // faux nbr attached lan segment(s) fmt
-#define rmtNWfmt      "10.%hhu.%hhu.0"
+#define rmtNWfmt      "10.%hhu.%hhu.%hhu"
 #define rmtNMfmt      "255.255.255.0"
 
 #define anyIPstr      "0.0.0.0"
+
+
+#define DVMRP_M       0x08
+#define DVMRP_G       0x04
+#define DVMRP_P       0x02
+#define DVMRP_L       0x01
 
 #endif

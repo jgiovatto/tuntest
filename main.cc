@@ -30,9 +30,9 @@
 //
 //  |                                         | ------   local IP stack   -----  |  
 //  |                                               |-----  RIPv2  ----|
-//  |             faux1 nbr                      tuntap1            tuntap2                                 faux2 nbr
-//  |  10.1.N.0/24 --- 172.16.1.99            172.16.1.1/24       172.16.2.1/24                 172.16.2.99  --- 10.2.N.0/24
-//  |                  02:02:00:00:01:63 ---  02:02:00:00:01:01   02:02:00:00:02:01  ---  02:02:00:00:02:63
+//  |  faux rmt net    faux1 nbr              tuntap1            tuntap2                faux2 nbr          faux rmt net
+//  |  10.1.1.0/24 --- 172.16.1.99            172.16.1.1/24      172.16.2.1/24          172.16.2.99 ------ 10.2.1.0/24
+//  |                  02:02:00:00:01:63 ---- 02:02:00:00:01:01  02:02:00:00:02:01 ---- 02:02:00:00:02:63
 //  |                                   
 //                               
 // tuntap1: flags=4163<UP,BROADCAST,RUNNING,MULTICAST>  mtu 1500
@@ -48,15 +48,7 @@
 // Kernel IP routing table after running zebra/rip
 // Destination     Gateway         Genmask         Flags Metric Ref    Use Iface
 // 10.1.1.0        172.16.1.99     255.255.255.0   UG    20     0        0 tuntap1
-// 10.1.2.0        172.16.1.99     255.255.255.0   UG    20     0        0 tuntap1
-// 10.1.3.0        172.16.1.99     255.255.255.0   UG    20     0        0 tuntap1
-// 10.1.4.0        172.16.1.99     255.255.255.0   UG    20     0        0 tuntap1
-// 10.1.5.0        172.16.1.99     255.255.255.0   UG    20     0        0 tuntap1
 // 10.2.1.0        172.16.2.99     255.255.255.0   UG    20     0        0 tuntap2
-// 10.2.2.0        172.16.2.99     255.255.255.0   UG    20     0        0 tuntap2
-// 10.2.3.0        172.16.2.99     255.255.255.0   UG    20     0        0 tuntap2
-// 10.2.4.0        172.16.2.99     255.255.255.0   UG    20     0        0 tuntap2
-// 10.2.5.0        172.16.2.99     255.255.255.0   UG    20     0        0 tuntap2
 // 172.16.1.0	   0.0.0.0         255.255.255.0   U     0      0        0 tuntap1
 // 172.16.2.0  	   0.0.0.0         255.255.255.0   U     0      0        0 tuntap2
 //
@@ -98,7 +90,7 @@ static void sig_handle(int sig)
     }
 }
 
-static size_t idx_to_tunid(size_t idx)
+static inline size_t idx_to_tunid(size_t idx)
  {
     return idx + 1;
  }
@@ -173,7 +165,7 @@ int main(int, char *[])
        fd_set rfds = read_fds;
      
        // wait for 10 sec 
-       timeval tv = {1, 0};  // XXX
+       timeval tv = {10, 0};
  
        int num_ready = select(fd_max + 1, &rfds, nullptr, nullptr, &tv);
 
@@ -190,6 +182,7 @@ int main(int, char *[])
            iphdr        ip;
            uint32_t     opt;
 
+// XXX enable/disable via command line opts
 #if 0             
            // build an igmp query for each interface
            for(uint8_t idx = 0; idx < NUM_TUN_TAP; ++idx)
@@ -207,7 +200,7 @@ int main(int, char *[])
 
               // eventually we should see some igmpv2 activity
               //
-              // sudo tcpdump -i tuntap1 -vvv -xxx -n -nn igmp
+              // sudo tcpdump -i tuntap1 -vvv -n igmp
               // IP (tos 0xc0, ttl 1, id 42136, offset 0, flags [none], proto IGMP (2), length 32, options (RA))
               // 172.16.1.99 > 224.0.0.1: igmp query v2
               //
@@ -215,25 +208,35 @@ int main(int, char *[])
               // 172.16.1.1 > 224.0.0.251: igmp v2 report 224.0.0.251
             }
 #endif
+
+// XXX enable/disable via command line opts
+#if 1
            // build a dvmrp probe for each interface
            for(uint8_t idx = 0; idx < NUM_TUN_TAP; ++idx)
             {
                dvmrphdr    dvmrphdr;
                dvmrpprobe  dvmrpprobe;
-               InAddrs     nbrs;
+               InAddrs     nbrs(1, inet_addr(fmt_str(rmtNWfmt, str1, sizeof(str1), idx_to_tunid(idx), idx, 1))); // faux rmt nbr
  
                set_dvmrp_probe(&eth, &ip, &opt, &dvmrphdr, &dvmrpprobe, nbrs, idx_to_tunid(idx));
 
                // order is important here
-               const  iovec iov[6] = {{(void *) &eth,        sizeof(eth)},              // eth hdr
-                                      {(void *) &ip,         sizeof(ip)},               // ip hdr
-                                      {(void *) &opt,        sizeof(opt)},              // ip option
-                                      {(void *) &dvmrphdr,   sizeof(dvmrphdr)},         // dvmrp hdr
-                                      {(void *) &dvmrpprobe, sizeof(dvmrpprobe)},       // dvmrp probe
-                                      {(void *) nbrs.data(), sizeof(nbrs.size() * 4)}}; // nbrs
+               const  iovec iov[6] = {{(void *) &eth,        sizeof(eth)},          // eth hdr
+                                      {(void *) &ip,         sizeof(ip)},           // ip hdr
+                                      {(void *) &opt,        sizeof(opt)},          // ip option
+                                      {(void *) &dvmrphdr,   sizeof(dvmrphdr)},     // dvmrp hdr
+                                      {(void *) &dvmrpprobe, sizeof(dvmrpprobe)},   // dvmrp probe
+                                      {(void *) nbrs.data(), nbrs.size() * 4}};     // nbrs if any
 
                tunTap[idx].writev(iov, nbrs.empty() ? 5 : 6);
+
+              // sudo tcpdump -i tuntap1 -n -vvv igmp
+              // IP (tos 0xc0, ttl 1, id 2602, offset 0, flags [none], proto IGMP (2), length 40, options (RA))
+              // 172.16.1.99 > 224.0.0.4: igmp dvmrp Probe
+ 	      // genid 1613354273
+	      // neighbor 10.1.0.1
             }
+#endif
         }
        else
         {

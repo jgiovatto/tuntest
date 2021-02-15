@@ -35,11 +35,12 @@ const char * fmt_str(const char * fmt,
                      const size_t strlen, 
                      const uint8_t val);
 
-const char * fmt_str2(const char * fmt, 
-                      char * const str, 
-                      const size_t strlen, 
-                      const uint8_t val1,
-                      const uint8_t val2);
+const char * fmt_str(const char * fmt, 
+                     char * const str, 
+                     const size_t strlen, 
+                     const uint8_t val1,
+                     const uint8_t val2,
+                     const uint8_t val3);
 
 
 void set_ipv4_hdr(iphdr * ip, 
