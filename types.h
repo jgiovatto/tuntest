@@ -16,10 +16,7 @@ struct Color {
 
 using Colors = std::vector<Color>;
 
-using InAddrs = std::vector<in_addr_t>;
-
 using IOV = std::pair<const iovec *, size_t>;
-
 
 
 // building blocks for rip msgs

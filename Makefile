@@ -20,7 +20,7 @@ clean :
 $(BIN) : $(OBJ)
 	$(CXX) $(CXXFLAGS) $(LDFLAGS) -o $(BIN) $(LIBS) $+
 
-tuntap.o: tuntap.cc
-main.o: main.cc
-netutils.o: netutils.cc
-dvmrp.o: dvmrp.cc
+tuntap.o: tuntap.cc tuntap.h
+main.o: main.cc dvmrp.h tuntap.h netutils.h
+netutils.o: netutils.cc netutils.h
+dvmrp.o: dvmrp.cc dvmrp.h netutils.h

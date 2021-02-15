@@ -91,7 +91,7 @@ static void sig_handle(int sig)
     }
 }
 
-static inline size_t idx_to_tunid(size_t idx)
+static inline uint8_t idx_to_tunid(size_t idx)
  {
     return idx + 1;
  }
@@ -100,6 +100,9 @@ int main(int, char *[])
 {
     signal(SIGINT,  sig_handle);
     signal(SIGTERM, sig_handle);
+
+    bool bIgmpQuery   = false;
+    bool bDvmrpReport = true;
 
     // try 2, though 1 would do
     const size_t NUM_TUN_TAP = 2;
@@ -114,9 +117,11 @@ int main(int, char *[])
 
     for(uint8_t idx = 0; idx < NUM_TUN_TAP; ++idx)
      {
+       const auto tunId = idx_to_tunid(idx);
+
        // open device
        if(tunTap[idx].open("/dev/net/tun", 
-            fmt_str(tunTapfmt, str1, sizeof(str1), idx_to_tunid(idx)), 
+            fmt_str(tunTapfmt, str1, sizeof(str1), tunId), 
               IFF_TAP | IFF_NO_PI) < 0)
         {
            bye("tun open");
@@ -124,14 +129,14 @@ int main(int, char *[])
 
        // set ip addr
        if(tunTap[idx].set_ip_address(inet_addr(
-             fmt_str(localIPfmt, str1, sizeof(str1), idx_to_tunid(idx))), 24) < 0)
+             fmt_str(localIPfmt, str1, sizeof(str1), tunId)), 24) < 0)
         {
            bye("tun set ip");
         }
 
        // set hw addr
        if(tunTap[idx].set_hw_address(ether_aton(
-             fmt_str(localHWfmt, str1, sizeof(str1), idx_to_tunid(idx)))) < 0)
+             fmt_str(localHWfmt, str1, sizeof(str1), tunId))) < 0)
         {
            bye("tun set ip");
         }
@@ -165,113 +170,147 @@ int main(int, char *[])
        // set our read fds
        fd_set rfds = read_fds;
      
-       // wait for 10 sec 
+       // wait for 1 sec 
        timeval tv = {1, 0};
  
        int num_ready = select(fd_max + 1, &rfds, nullptr, nullptr, &tv);
 
-       // timed out lets do something
-       if((num_ready == 0) && bRunning)
+       while((num_ready > 0) && bRunning)
+        {
+          for(uint8_t idx = 0; idx < NUM_TUN_TAP; ++idx)
+           {
+              const int fd = tunTap[idx].get_handle();
+
+              if(FD_ISSET(fd, &rfds))
+               {
+                 const int num_read = tunTap[idx].read(buff, sizeof(buff));
+
+                 if(num_read > 0) 
+                  {
+                     const int num_write = parse_frame(buff, sizeof(buff), num_read, idx_to_tunid(idx));
+
+                     // bounce something back
+                     if(num_write > 0)
+                      {
+                        tunTap[idx].write(buff, num_write);
+                      }
+                  }
+                 else
+                  {
+                    perror("tuntap.read");
+                  }
+
+                  --num_ready;
+                  FD_CLR(fd, &rfds);
+               }
+           }  
+        }
+
+       // periodic timer
+       if((time(NULL) % 10 == 0) && bRunning)
         {
            // alternative to using a contiguous buffer
            // scatter/gather i/o is helpful for
            // buffer boundry alignment issues
            // that may arise due to the 14 byte ether header.
  
-// XXX enable/disable via command line opts
-#if 0             
-           // the are common
-           ether_header eth;
-           iphdr        ip;
-           uint32_t     opt;
-
-
-           // build an igmp query for each interface
-           for(uint8_t idx = 0; idx < NUM_TUN_TAP; ++idx)
+           if(bIgmpQuery)
             {
-               igmp igmp;
-               set_igmp_query(&eth, &ip, &opt, &igmp, idx + 1);
+              // the are common
+              ether_header eth;
+              iphdr        ip;
+              uint32_t     opt;
 
-               // order is important here
-               const iovec iov[4] = {{(void *) &eth,  sizeof(eth)},   // eth hdr
-                                    {(void *)  &ip,   sizeof(ip)},    // ip hdr
-                                    {(void *)  &opt,  sizeof(opt)},   // ip option
-                                    {(void *)  &igmp, sizeof(igmp)}}; // igmp hdr
+              // build an igmp query for each interface
+              for(uint8_t idx = 0; idx < NUM_TUN_TAP; ++idx)
+               {
+                  igmp igmp;
+                  set_igmp_query(&eth, &ip, &opt, &igmp, idx + 1);
 
-               tunTap[idx].writev(iov, 4);
+                  // order is important here
+                  const iovec iov[4] = {{(void *) &eth,  sizeof(eth)},   // eth hdr
+                                       {(void *)  &ip,   sizeof(ip)},    // ip hdr
+                                       {(void *)  &opt,  sizeof(opt)},   // ip option
+                                       {(void *)  &igmp, sizeof(igmp)}}; // igmp hdr
 
-              // eventually we should see some igmpv2 activity
-              //
-              // sudo tcpdump -i tuntap1 -vvv -n igmp
-              // IP (tos 0xc0, ttl 1, id 42136, offset 0, flags [none], proto IGMP (2), length 32, options (RA))
-              // 172.16.1.99 > 224.0.0.1: igmp query v2
-              //
-              // IP (tos 0xc0, ttl 1, id 0, offset 0, flags [DF], proto IGMP (2), length 32, options (RA))
-              // 172.16.1.1 > 224.0.0.251: igmp v2 report 224.0.0.251
-            }
-#endif
+                  tunTap[idx].writev(iov, 4);
 
-// XXX enable/disable via command line opts
-#if 1
-           // build a dvmrp probe for each interface
-           for(uint8_t idx = 0; idx < NUM_TUN_TAP; ++idx)
-            {
-               const auto tunId = idx_to_tunid(idx);
+                 // eventually we should see some igmpv2 activity
+                 //
+                 // sudo tcpdump -i tuntap1 -vvv -n igmp
+                 // IP (tos 0xc0, ttl 1, id 42136, offset 0, flags [none], proto IGMP (2), length 32, options (RA))
+                 // 172.16.1.99 > 224.0.0.1: igmp query v2
+                 //
+                 // IP (tos 0xc0, ttl 1, id 0, offset 0, flags [DF], proto IGMP (2), length 32, options (RA))
+                 // 172.16.1.1 > 224.0.0.251: igmp v2 report 224.0.0.251
+               }
+          }
 
-               InAddrs nbrs(1, inet_addr(fmt_str(rmtNWfmt, str1, sizeof(str1), tunId, idx, 1)));  // faux rmt nbr
-
-               DVMRP_Probe dvmrp_probe{ether_aton(fmt_str(fauxHWfmt, str1, sizeof(str1), tunId)), // faux nbr hw
-                                       inet_addr(fmt_str(fauxIPfmt, str1, sizeof(str1), tunId)),  // faux nbr ip
-                                       nbrs};                                                     // faux rmt nbr
-
-               const auto iov = dvmrp_probe.getIOV(); 
-
-               tunTap[idx].writev(iov.first, iov.second);
-
-              // sudo tcpdump -i tuntap1 -n -vvv igmp
-              // IP (tos 0xc0, ttl 1, id 2602, offset 0, flags [none], proto IGMP (2), length 40, options (RA))
-              // 172.16.1.99 > 224.0.0.4: igmp dvmrp Probe
- 	      // genid 1613354273
-	      // neighbor 10.1.0.1
-            }
-#endif
-        }
-       else
-        {
-          while((num_ready > 0) && bRunning)
+          if(bDvmrpReport)
            {
+             // build a dvmrp probe for each interface
              for(uint8_t idx = 0; idx < NUM_TUN_TAP; ++idx)
               {
-                 const int fd = tunTap[idx].get_handle();
+                const auto tunId = idx_to_tunid(idx);
 
-                 if(FD_ISSET(fd, &rfds))
-                  {
-                    const int num_read = tunTap[idx].read(buff, sizeof(buff));
+                 { // dvmrp probe
+                   const uint32_t genid = 1;
 
-                    if(num_read > 0) 
-                     {
-                        const int num_write = parse_frame(buff, sizeof(buff), num_read, idx_to_tunid(idx));
+                   dvmrpneighbors_t nbrs{dvmrpneighbor_t{inet_addr(fmt_str(rmtNWfmt,   str1, sizeof(str1), tunId, idx, 1))}, // faux rmt nbr
+                                         dvmrpneighbor_t{inet_addr(fmt_str(localIPfmt, str1, sizeof(str1), tunId))}};      // lcl nbr
 
-                        // bounce something back
-                        if(num_write > 0)
-                         {
-                           tunTap[idx].write(buff, num_write);
-                         }
-                     }
-                    else
-                     {
-                       perror("tuntap.read");
-                     }
 
-                     --num_ready;
-                     FD_CLR(fd, &rfds);
-                  }
-              }  
-           }
-       }
-    }
+                   DVMRP_Probe dvmrp_probe{ether_aton(fmt_str(fauxHWfmt, str1, sizeof(str1), tunId)), // faux nbr hw
+                                           inet_addr (fmt_str(fauxIPfmt, str1, sizeof(str1), tunId)), // faux nbr ip
+                                           genid,                                                     // gen id
+                                           nbrs};                                                     // faux rmt nbr
+ 
+                   tunTap[idx].writev(dvmrp_probe.getIOV().first, dvmrp_probe.getIOV().second);
+                 }
 
-    printf("bye \n" COLOR_NRM);
+
+                 { // dvmrp report
+                   dvmrproutes_t routes{ dvmrproute_t{{0xFF, 0xFF, 0X00},   // 24 bit netmask
+                                                      {10, tunId, 1},       // faux rmt nbr
+                                                       0x81}};              // metric
+
+                   DVMRP_Report dvmrp_report{ether_aton(fmt_str(fauxHWfmt, str1, sizeof(str1), tunId)), // faux nbr hw
+                                             inet_addr (fmt_str(fauxIPfmt, str1, sizeof(str1), tunId)), // faux nbr ip
+                                             routes};                                                   // routes
+
+                   tunTap[idx].writev(dvmrp_report.getIOV().first, dvmrp_report.getIOV().second);
+                 }
+            }
+
+           // below are some tcpdum captures 
+           // sudo tcpdump -i tuntap1  -vvv igmp -n
+           // IP (tos 0xc0, ttl 1, id 14946, offset 0, flags [none], proto IGMP (2), length 44, options (RA))
+           //     172.16.1.99 > 224.0.0.4: igmp dvmrp Probe
+           // 	genid 1
+           // 	neighbor 10.1.0.1
+           // 	neighbor 172.16.1.1
+
+           // IP (tos 0xc0, ttl 1, id 14946, offset 0, flags [none], proto IGMP (2), length 39, options (RA))
+           //     172.16.1.99 > 224.0.0.4: igmp dvmrp Report
+           // 	Mask 255.255.255.0
+           // 	  10.1.1.0 metric 1
+
+           // IP (tos 0xc0, ttl 1, id 58682, offset 0, flags [none], proto IGMP (2), length 40, options (RA))
+           //     172.16.1.1 > 224.0.0.4: igmp dvmrp Probe
+           // 	genid 2234647808
+           // 	neighbor 172.16.1.99
+
+           // IP (tos 0xc0, ttl 1, id 58887, offset 0, flags [none], proto IGMP (2), length 47, options (RA))
+           //     172.16.1.1 > 224.0.0.4: igmp dvmrp Report
+           // 	Mask 255.255.255.0
+           // 	  10.1.1.0 metric 34
+           // 	  10.2.1.0 metric 2
+           // 	  172.16.2.0 metric 1
+         }
+      }
+   }
+
+   printf("bye \n" COLOR_NRM);
 
     return (0);
 }
