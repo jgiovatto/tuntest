@@ -26,9 +26,6 @@ const uint8_t  TOS_NC = 0xC0;
 
 // see /usr/include/netinet/if_ether.h for mc hw fmt
 //
-// dvmrp ip addr
-#define   dvmrpIPstr  "224.0.0.4"
-#define   dvmrpHWstr  "01:00:5e:00:00:04"
 
 // known ripv2 addrs
 #define   ripIPstr    "224.0.0.9"
@@ -51,10 +48,5 @@ const uint8_t  TOS_NC = 0xC0;
 
 #define anyIPstr      "0.0.0.0"
 
-
-#define DVMRP_M       0x08
-#define DVMRP_G       0x04
-#define DVMRP_P       0x02
-#define DVMRP_L       0x01
 
 #endif

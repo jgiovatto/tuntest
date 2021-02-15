@@ -57,6 +57,7 @@
 #include "tuntap.h"
 #include "netutils.h"
 #include "types.h"
+#include "dvmrp.h"
 
 #include <stdio.h>
 #include <errno.h>
@@ -165,7 +166,7 @@ int main(int, char *[])
        fd_set rfds = read_fds;
      
        // wait for 10 sec 
-       timeval tv = {10, 0};
+       timeval tv = {1, 0};
  
        int num_ready = select(fd_max + 1, &rfds, nullptr, nullptr, &tv);
 
@@ -177,13 +178,14 @@ int main(int, char *[])
            // buffer boundry alignment issues
            // that may arise due to the 14 byte ether header.
  
+// XXX enable/disable via command line opts
+#if 0             
            // the are common
            ether_header eth;
            iphdr        ip;
            uint32_t     opt;
 
-// XXX enable/disable via command line opts
-#if 0             
+
            // build an igmp query for each interface
            for(uint8_t idx = 0; idx < NUM_TUN_TAP; ++idx)
             {
@@ -214,21 +216,17 @@ int main(int, char *[])
            // build a dvmrp probe for each interface
            for(uint8_t idx = 0; idx < NUM_TUN_TAP; ++idx)
             {
-               dvmrphdr    dvmrphdr;
-               dvmrpprobe  dvmrpprobe;
-               InAddrs     nbrs(1, inet_addr(fmt_str(rmtNWfmt, str1, sizeof(str1), idx_to_tunid(idx), idx, 1))); // faux rmt nbr
- 
-               set_dvmrp_probe(&eth, &ip, &opt, &dvmrphdr, &dvmrpprobe, nbrs, idx_to_tunid(idx));
+               const auto tunId = idx_to_tunid(idx);
 
-               // order is important here
-               const  iovec iov[6] = {{(void *) &eth,        sizeof(eth)},          // eth hdr
-                                      {(void *) &ip,         sizeof(ip)},           // ip hdr
-                                      {(void *) &opt,        sizeof(opt)},          // ip option
-                                      {(void *) &dvmrphdr,   sizeof(dvmrphdr)},     // dvmrp hdr
-                                      {(void *) &dvmrpprobe, sizeof(dvmrpprobe)},   // dvmrp probe
-                                      {(void *) nbrs.data(), nbrs.size() * 4}};     // nbrs if any
+               InAddrs nbrs(1, inet_addr(fmt_str(rmtNWfmt, str1, sizeof(str1), tunId, idx, 1)));  // faux rmt nbr
 
-               tunTap[idx].writev(iov, nbrs.empty() ? 5 : 6);
+               DVMRP_Probe dvmrp_probe{ether_aton(fmt_str(fauxHWfmt, str1, sizeof(str1), tunId)), // faux nbr hw
+                                       inet_addr(fmt_str(fauxIPfmt, str1, sizeof(str1), tunId)),  // faux nbr ip
+                                       nbrs};                                                     // faux rmt nbr
+
+               const auto iov = dvmrp_probe.getIOV(); 
+
+               tunTap[idx].writev(iov.first, iov.second);
 
               // sudo tcpdump -i tuntap1 -n -vvv igmp
               // IP (tos 0xc0, ttl 1, id 2602, offset 0, flags [none], proto IGMP (2), length 40, options (RA))

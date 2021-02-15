@@ -6,27 +6,9 @@
 #include <netinet/udp.h>
 #include <netinet/igmp.h>
 
-#include <vector>
 
 #ifndef TUNTEST_NETUTILS_H
 #define TUNTEST_NETUTILS_H
-
-
-using InAddrs = std::vector<in_addr_t>;
-
-struct dvmrphdr {
-    uint8_t  type;
-    uint8_t  code;
-    uint16_t check;
-} __attribute__((packed));
-
-
-struct dvmrpprobe {
-    uint16_t cap;
-    uint8_t  minor;
-    uint8_t  major;
-    uint32_t genid;
-} __attribute__((packed));
 
 
 
@@ -77,16 +59,6 @@ void set_igmp_query(ether_header * eth,
                     igmp * igmp, 
                     const uint8_t tunId);
 
-void set_dvmrp_probe(ether_header * eth, 
-                     iphdr * ip, 
-                     uint32_t * ipop,
-                     dvmrphdr * hdr, 
-                     dvmrpprobe * probe, 
-                     const InAddrs & nbrs,
-                     const uint8_t tunId);
-
-
-
 void print_hex(const char * buff, size_t const bufflen, const Colors & colors);
 
 uint16_t csum16(const void *buff, uint16_t len, uint16_t carry = 0);
@@ -96,6 +68,7 @@ uint16_t csum16v(const iovec * iov, const size_t iovn);
 size_t build_rip_frame(char * buff, size_t bufflen, uint8_t tunId);
 
 int parse_frame(char *buff, size_t bufflen, size_t msglen, uint8_t tunId);
+
 
 
 #endif

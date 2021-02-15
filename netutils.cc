@@ -368,64 +368,6 @@ void set_igmp_query(ether_header * eth,
 
 }
 
-void set_dvmrp_probe(ether_header * eth, 
-                     iphdr * ip, 
-                     uint32_t * ipop,
-                     dvmrphdr * dhdr, 
-                     dvmrpprobe * dprobe, 
-                     const InAddrs & nbrs,
-                     const uint8_t tunId)
-{
-   memset(eth,    0x0, sizeof(*eth));
-   memset(ip,     0x0, sizeof(*ip));
-   memset(ipop,   0x0, sizeof(*ipop));
-   memset(dhdr,   0x0, sizeof(*dhdr));
-   memset(dprobe, 0x0, sizeof(*dprobe));
-
-   set_eth_hdr(eth,
-               ether_aton_r(fmt_str(fauxHWfmt, str1, sizeof(str1), tunId), &eth1), // faux nbr
-               ether_aton_r(dvmrpHWstr, &eth2),                                    // all dvmrp routers
-               ETHERTYPE_IP);                                                      // ipv4
-
-   // igmp uses the router alert option
-   *ipop = htonl(ROUTER_ALERT);
-
-   set_ipv4_hdr(ip,
-                TOS_NC,                                                     // tos
-                1,                                                          // ttl
-                getpid(),                                                   // id
-                sizeof(*dhdr) + sizeof(*dprobe) + (nbrs.size() * 4),        // payload
-                IPPROTO_IGMP,                                               // proto
-                inet_addr(fmt_str(fauxIPfmt, str1, sizeof(str1), tunId)),   // faux nbr ip
-                inet_addr(dvmrpIPstr),                                      // all dvmrp routers
-                ipop,                                                       // options
-                1);                                                         // num options
-
-
-  dhdr->type  = IGMP_DVMRP;
-  dhdr->code  = 0x1;        // dvmrp probe
-  dhdr->check = 0;
-
-  dprobe->cap = htons(DVMRP_G + DVMRP_P); // genid, prune
-
-  if(nbrs.empty()) {
-    dprobe->cap += htons(DVMRP_L); // leaf
-  }
-
-  dprobe->minor = 0xFF;
-  dprobe->major = 0x03;
-  dprobe->genid = htonl(time(NULL));
-
-  const iovec chkv[3] = {{(void*)dhdr,        sizeof(*dhdr)}, 
-                         {(void*)dprobe,      sizeof(*dprobe)},
-                         {(void*)nbrs.data(), nbrs.size() * 4}};
-
-  // set dvmrp hdr csum
-  dhdr->check = ~csum16v(chkv, 3);
-}
-
-
-
 int parse_frame(char *buff, const size_t buff_len, const size_t msg_len, const uint8_t tunId)
 {
     Colors colors(msg_len, Color(COLOR_NRM));

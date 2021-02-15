@@ -1,5 +1,5 @@
-SRC = tuntap.cc main.cc netutils.cc
-OBJ = tuntap.o  main.o netutils.o
+SRC = tuntap.cc main.cc netutils.cc dvmrp.cc
+OBJ = tuntap.o  main.o netutils.o dvmrp.o
 
 BIN = tuntest
 
@@ -23,3 +23,4 @@ $(BIN) : $(OBJ)
 tuntap.o: tuntap.cc
 main.o: main.cc
 netutils.o: netutils.cc
+dvmrp.o: dvmrp.cc
