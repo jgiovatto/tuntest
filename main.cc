@@ -62,6 +62,7 @@
 #include <stdio.h>
 #include <errno.h>
 #include <signal.h>
+#include <time.h>
 
 #include <sys/select.h>
 #include <sys/time.h>
